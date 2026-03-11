@@ -1,9 +1,20 @@
+/**
+ * @file Charger template loader — reads JSON templates and produces a normalized
+ * LoadedCharger with resolved URL, auth credentials, connector states, and
+ * runtime state tracking (transactionId, config overrides).
+ * @module @xingu-charging/sem
+ * @license MIT
+ *
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ */
+
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { ChargePointStatus } from '../ocpp/types.js'
 import type { ChargerConfig } from '../ocpp/serverMessages.js'
 
-// Raw charger template JSON structure (supports both sim format and simplified format)
+/** Raw charger template JSON structure. Supports both sim format (OCPP field names) and simplified format. */
 interface ChargerTemplate {
   name?: string
   identity?: {
@@ -57,29 +68,55 @@ interface ChargerTemplate {
   ocppConfiguration?: Record<string, string>
 }
 
+/** Mutable runtime state of a charger session. */
 export interface ChargerState {
+  /** Whether the WebSocket is currently connected */
   connected: boolean
+  /** Active transaction ID from StartTransaction, null when idle */
   transactionId: number | null
+  /** Current status of each connector (connectorId -> ChargePointStatus) */
   connectorStates: Map<number, ChargePointStatus>
+  /** OCPP configuration key overrides applied via ChangeConfiguration */
   configOverrides: Map<string, string>
 }
 
+/** A fully resolved charger ready for connection, with all template values normalized. */
 export interface LoadedCharger {
+  /** Display name from template or chargerId fallback */
   name: string
+  /** Unique charger identifier, appended to the WebSocket URL */
   chargerId: string
+  /** Fully resolved WebSocket URL including chargerId path segment */
   url: string
+  /** OCPP protocol version */
   protocol: 'ocpp1.6' | 'ocpp2.0.1'
+  /** Basic Auth credentials for WebSocket connection (optional) */
   auth?: { username: string; password: string }
+  /** OCPP configuration (identity, capabilities, connectors, meter config) */
   config: ChargerConfig
+  /** Mutable runtime state */
   state: ChargerState
 }
 
+/** Normalize protocol string variants to the canonical internal format. */
 function normalizeProtocol(proto?: string): 'ocpp1.6' | 'ocpp2.0.1' {
   if (!proto) return 'ocpp1.6'
   if (proto === '2.0.1' || proto === 'ocpp2.0.1') return 'ocpp2.0.1'
   return 'ocpp1.6'
 }
 
+/**
+ * Load a charger template JSON file and resolve all values into a ready-to-use LoadedCharger.
+ *
+ * Handles dual-format identity fields (sim vs simplified), environment-based URL resolution,
+ * automatic chargerId URL appending, and Basic Auth credential extraction.
+ *
+ * @param path - Path to the charger JSON template file
+ * @param envOverride - Override the default environment (staging, production, local)
+ * @param urlOverride - Override the WebSocket URL entirely (bypasses template environments)
+ * @returns Fully resolved LoadedCharger ready for OcppConnection.connect()
+ * @throws If the template file cannot be read/parsed, or the environment is not found
+ */
 export function loadChargerTemplate(
   path: string,
   envOverride?: string,
@@ -163,14 +200,17 @@ export function loadChargerTemplate(
   }
 }
 
+/** Update the active transaction ID (set from StartTransaction, cleared on StopTransaction). */
 export function setTransactionId(charger: LoadedCharger, txId: number | null): void {
   charger.state.transactionId = txId
 }
 
+/** Update the cached status of a connector after sending StatusNotification. */
 export function setConnectorStatus(charger: LoadedCharger, connectorId: number, status: ChargePointStatus): void {
   charger.state.connectorStates.set(connectorId, status)
 }
 
+/** Apply a configuration change from ChangeConfiguration. Updates both the override map and active config. */
 export function applyConfigChange(charger: LoadedCharger, key: string, value: string): void {
   charger.state.configOverrides.set(key, value)
   // Also update the ocppConfiguration so GetConfiguration reflects changes

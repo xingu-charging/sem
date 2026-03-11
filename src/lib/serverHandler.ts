@@ -1,3 +1,14 @@
+/**
+ * @file Server message dispatcher — routes incoming server-initiated OCPP actions
+ * to the appropriate response builder and sends the reply. Handles GetConfiguration,
+ * ChangeConfiguration, Reset, RemoteStart/StopTransaction, TriggerMessage, and more.
+ * @module @xingu-charging/sem
+ * @license MIT
+ *
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ */
+
 import { OcppConnection } from '../ocpp/connection.js'
 import type {
   GetConfigurationRequest,
@@ -31,6 +42,18 @@ import type { DataTransferRequest } from '../ocpp/serverMessages.js'
 import { type LoadedCharger, applyConfigChange } from './charger.js'
 import * as output from './output.js'
 
+/**
+ * Dispatch and respond to a server-initiated OCPP message.
+ *
+ * Receives a CALL from the Central System, builds the appropriate CALLRESULT
+ * (or CALLERROR for unsupported actions), sends it back, and logs the event.
+ *
+ * @param connection - Active OCPP WebSocket connection
+ * @param messageId - The CALL messageId to correlate the response
+ * @param action - The OCPP action name (e.g., 'GetConfiguration', 'Reset')
+ * @param payload - The CALL payload from the server
+ * @param charger - Loaded charger with config and state
+ */
 export async function handleServerMessage(
   connection: OcppConnection,
   messageId: string,

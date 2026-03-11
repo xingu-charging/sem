@@ -1,3 +1,14 @@
+/**
+ * @file OCPP WebSocket connection — manages the WebSocket lifecycle including
+ * connect, disconnect, reconnect with exponential backoff, heartbeat loop,
+ * and event-based message dispatch.
+ * @module @xingu-charging/sem
+ * @license MIT
+ *
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ */
+
 import WebSocket from 'ws'
 import {
   ConnectionConfig,
@@ -6,14 +17,27 @@ import {
 } from './types.js'
 import { isValidOcppMessage, createHeartbeat } from './messages.js'
 
+/** Event types emitted by OcppConnection. */
 export type ConnectionEventMap = {
+  /** Fired when the connection state changes (connecting, connected, disconnected, error) */
   stateChange: ConnectionState
+  /** Fired when an OCPP message is received from the server */
   message: OcppMessage
+  /** Fired after an OCPP message is successfully sent to the server */
   messageSent: OcppMessage
+  /** Fired on WebSocket or protocol errors */
   error: Error
+  /** Structured log events for the connection lifecycle */
   log: { level: 'info' | 'warn' | 'error'; message: string }
 }
 
+/**
+ * Manages the OCPP WebSocket connection lifecycle.
+ *
+ * Provides connect/disconnect, automatic reconnection with exponential backoff,
+ * periodic heartbeat sending, and a typed event emitter for message correlation.
+ * This class is output-agnostic — it emits `log` events instead of writing to console.
+ */
 export class OcppConnection {
   private ws: WebSocket | null = null
   private config: ConnectionConfig | null = null
@@ -35,10 +59,16 @@ export class OcppConnection {
     this.listeners.set('log', new Set())
   }
 
+  /** Get the current connection state. */
   getState(): ConnectionState {
     return this.state
   }
 
+  /**
+   * Open a WebSocket connection to an OCPP gateway.
+   * Resolves when the connection is established, rejects on error/timeout.
+   * Automatically enables reconnection on unexpected disconnects.
+   */
   async connect(config: ConnectionConfig): Promise<void> {
     if (this.state === ConnectionState.CONNECTED) {
       throw new Error('Already connected')
@@ -110,6 +140,7 @@ export class OcppConnection {
     })
   }
 
+  /** Close the WebSocket connection, stop heartbeat, cancel reconnection, and clear all listeners. */
   async disconnect(): Promise<void> {
     this.shouldReconnect = false
     this.stopReconnection()
@@ -127,6 +158,7 @@ export class OcppConnection {
     this.listeners.forEach((handlers) => handlers.clear())
   }
 
+  /** Start the periodic heartbeat loop. Replaces any existing heartbeat timer. */
   startHeartbeat(intervalSeconds: number): void {
     this.stopHeartbeat()
     this.heartbeatInterval = intervalSeconds
@@ -139,6 +171,7 @@ export class OcppConnection {
     this.emit('log', { level: 'info', message: `Heartbeat started: every ${intervalSeconds}s` })
   }
 
+  /** Stop the heartbeat loop and log that it was stopped. */
   stopHeartbeat(): void {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
@@ -147,6 +180,7 @@ export class OcppConnection {
     }
   }
 
+  /** Pause heartbeat without logging (used during reconnection). */
   pauseHeartbeat(): void {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
@@ -154,6 +188,7 @@ export class OcppConnection {
     }
   }
 
+  /** Resume heartbeat after reconnection, if a heartbeat interval was previously set. */
   resumeHeartbeat(): void {
     if (this.heartbeatInterval > 0 && !this.heartbeatTimer && this.state === ConnectionState.CONNECTED) {
       const intervalMs = this.heartbeatInterval * 1000
@@ -181,6 +216,7 @@ export class OcppConnection {
     }
   }
 
+  /** Send an OCPP message over the WebSocket. Emits 'messageSent' on success. */
   async send(message: OcppMessage): Promise<void> {
     if (!this.ws || this.state !== ConnectionState.CONNECTED) {
       throw new Error('Not connected')
@@ -218,6 +254,7 @@ export class OcppConnection {
     this.emit('stateChange', state)
   }
 
+  /** Subscribe to a typed connection event. */
   on<K extends keyof ConnectionEventMap>(
     event: K,
     handler: (data: ConnectionEventMap[K]) => void
@@ -225,6 +262,7 @@ export class OcppConnection {
     this.listeners.get(event)?.add(handler as (data: unknown) => void)
   }
 
+  /** Unsubscribe from a typed connection event. */
   off<K extends keyof ConnectionEventMap>(
     event: K,
     handler: (data: ConnectionEventMap[K]) => void

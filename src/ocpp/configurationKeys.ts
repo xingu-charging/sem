@@ -1,8 +1,11 @@
 /**
- * OCPP 1.6 Configuration Keys Reference
+ * @file OCPP 1.6 configuration key reference — complete list of standard configuration
+ * keys as defined by the Open Charge Alliance specification, organized by feature profile.
+ * @module @xingu-charging/sem
+ * @license MIT
  *
- * This module provides comprehensive documentation for all standard OCPP 1.6
- * configuration keys as defined by the Open Charge Alliance specification.
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
  */
 
 export interface ConfigurationKeyInfo {

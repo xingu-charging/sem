@@ -1,3 +1,13 @@
+/**
+ * @file OCPP type definitions — message types, request/response interfaces, and enums
+ * for OCPP 1.6 and 2.0.1 protocols.
+ * @module @xingu-charging/sem
+ * @license MIT
+ *
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ */
+
 // OCPP Message Types (JSON-RPC 2.0 over WebSocket)
 export const MessageType = {
   CALL: 2,

@@ -1,3 +1,14 @@
+/**
+ * @file OCPP message builders — constructs CALL messages for charger-to-server communication.
+ * Covers BootNotification, Heartbeat, StatusNotification, Authorize, StartTransaction,
+ * StopTransaction, MeterValues, DataTransfer, and diagnostic notifications.
+ * @module @xingu-charging/sem
+ * @license MIT
+ *
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ */
+
 import {
   MessageType,
   OcppCallMessage,

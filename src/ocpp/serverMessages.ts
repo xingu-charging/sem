@@ -1,7 +1,14 @@
 /**
- * Server-Initiated Message Handlers
+ * @file Server message response builders — constructs CALLRESULT/CALLERROR replies
+ * to server-initiated OCPP actions (GetConfiguration, ChangeConfiguration, Reset,
+ * RemoteStart/Stop, TriggerMessage, etc.).
+ * @module @xingu-charging/sem
+ * @license MIT
  *
- * This module handles OCPP messages initiated by the Central System (server)
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ *
+ * Handles OCPP messages initiated by the Central System (server)
  * and sent to the Charge Point (charger simulator). The charger must respond
  * with appropriate CALLRESULT messages.
  *

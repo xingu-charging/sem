@@ -1,30 +1,28 @@
+/**
+ * @file Interactive REPL — readline-based command loop for direct terminal use.
+ * @module @xingu-charging/sem
+ * @license MIT
+ *
+ * Copyright (c) 2026 Xingu Charging
+ * https://github.com/xingu-charging/sem
+ */
+
 import { createInterface, type Interface } from 'node:readline'
 import { OcppConnection } from './ocpp/connection.js'
-import { MessageType, type ChargePointStatus, type OcppMessage } from './ocpp/types.js'
-import {
-  createBootNotification,
-  createHeartbeat,
-  createStatusNotification,
-  createAuthorize,
-  createStartTransaction,
-  createStopTransaction,
-  createMeterValues,
-  createDataTransfer
-} from './ocpp/messages.js'
+import { MessageType, type OcppMessage } from './ocpp/types.js'
 import { handleServerMessage } from './lib/serverHandler.js'
 import { type LoadedCharger, setTransactionId, setConnectorStatus } from './lib/charger.js'
+import { buildCommand, formatCallResult, isCommandError } from './commands.js'
+import type { ChargePointStatus } from './ocpp/types.js'
 import * as output from './lib/output.js'
 
-const VALID_STATUSES: ChargePointStatus[] = [
-  'Available', 'Preparing', 'Charging', 'SuspendedEVSE',
-  'SuspendedEV', 'Finishing', 'Reserved', 'Unavailable', 'Faulted'
-]
-
+/** Help text definition for a single REPL command. */
 interface CommandDef {
   usage: string
   description: string
 }
 
+/** REPL command definitions displayed by the `help` command. */
 const COMMANDS: Record<string, CommandDef> = {
   boot: { usage: 'boot', description: 'Send BootNotification' },
   heartbeat: { usage: 'heartbeat', description: 'Send Heartbeat' },
@@ -39,6 +37,16 @@ const COMMANDS: Record<string, CommandDef> = {
   exit: { usage: 'exit', description: 'Disconnect and exit' }
 }
 
+/**
+ * Start the interactive REPL loop.
+ *
+ * Wires up OCPP message event handlers for request/response correlation,
+ * creates a readline interface for user input, and dispatches commands.
+ * Handles graceful shutdown on EOF (stdin close) or the `exit` command.
+ *
+ * @param connection - Connected OcppConnection instance
+ * @param charger - Loaded charger template with runtime state
+ */
 export function startRepl(
   connection: OcppConnection,
   charger: LoadedCharger
@@ -123,66 +131,25 @@ export function startRepl(
   })
 }
 
+/** Format and display a CALLRESULT, applying side effects (heartbeat, transactionId). */
 function handleCallResult(
   action: string,
   payload: Record<string, unknown>,
   connection: OcppConnection,
   charger: LoadedCharger
 ): void {
-  switch (action) {
-    case 'BootNotification': {
-      const status = payload.status as string
-      const interval = payload.interval as number
-      output.incoming('BootNotification', `status=${status} interval=${interval}s`)
-      if (status === 'Accepted' && interval > 0) {
-        connection.startHeartbeat(interval)
-      }
-      break
-    }
-    case 'Heartbeat': {
-      const time = payload.currentTime as string
-      output.incoming('Heartbeat', `serverTime=${time}`)
-      break
-    }
-    case 'StatusNotification': {
-      output.incoming('StatusNotification', 'accepted')
-      break
-    }
-    case 'Authorize': {
-      const idTagInfo = payload.idTagInfo as Record<string, unknown>
-      output.incoming('Authorize', `status=${idTagInfo?.status}`)
-      break
-    }
-    case 'StartTransaction': {
-      const txId = payload.transactionId as number
-      const idTagInfo = payload.idTagInfo as Record<string, unknown>
-      setTransactionId(charger, txId)
-      output.incoming('StartTransaction', `transactionId=${txId} status=${idTagInfo?.status}`)
-      break
-    }
-    case 'StopTransaction': {
-      const idTagInfo = payload.idTagInfo as Record<string, unknown> | undefined
-      setTransactionId(charger, null)
-      output.incoming('StopTransaction', `status=${idTagInfo?.status ?? 'accepted'}`)
-      break
-    }
-    case 'MeterValues': {
-      output.incoming('MeterValues', 'accepted')
-      break
-    }
-    case 'DataTransfer': {
-      const status = payload.status as string
-      const data = payload.data as string | undefined
-      output.incoming('DataTransfer', `status=${status}${data ? ` data=${data}` : ''}`)
-      break
-    }
-    default: {
-      output.incoming(action, JSON.stringify(payload))
-      break
-    }
+  const formatted = formatCallResult(action, payload)
+  output.incoming(action, formatted.response.includes(': ') ? formatted.response.split(': ').slice(1).join(': ') : formatted.response)
+
+  if (formatted.startHeartbeat !== undefined) {
+    connection.startHeartbeat(formatted.startHeartbeat)
+  }
+  if (formatted.transactionId !== undefined) {
+    setTransactionId(charger, formatted.transactionId)
   }
 }
 
+/** Execute a single REPL command — handles REPL-only commands and delegates OCPP commands to buildCommand(). */
 async function executeCommand(
   command: string,
   args: string[],
@@ -190,160 +157,46 @@ async function executeCommand(
   charger: LoadedCharger,
   rl: Interface
 ): Promise<void> {
+  // Handle REPL-only commands
   switch (command) {
-    case 'boot': {
-      const identity = charger.config.identity
-      const message = createBootNotification({
-        chargePointVendor: identity.vendor,
-        chargePointModel: identity.model,
-        chargePointSerialNumber: identity.serialNumber,
-        chargeBoxSerialNumber: identity.chargeBoxSerialNumber,
-        firmwareVersion: identity.firmwareVersion,
-        iccid: identity.iccid,
-        imsi: identity.imsi,
-        meterType: identity.meterType,
-        meterSerialNumber: identity.meterSerialNumber
-      })
-      await connection.send(message)
-      output.outgoing('BootNotification', `vendor=${identity.vendor} model=${identity.model}`)
-      break
-    }
-
-    case 'heartbeat': {
-      const message = createHeartbeat()
-      await connection.send(message)
-      output.outgoing('Heartbeat')
-      break
-    }
-
-    case 'status': {
-      if (args.length < 2) {
-        output.error('Usage: status <connectorId> <status>')
-        output.info(`  Valid statuses: ${VALID_STATUSES.join(', ')}`)
-        break
-      }
-      const connectorId = parseInt(args[0], 10)
-      const statusValue = args[1] as ChargePointStatus
-      if (isNaN(connectorId)) {
-        output.error('connectorId must be a number')
-        break
-      }
-      if (!VALID_STATUSES.includes(statusValue)) {
-        output.error(`Invalid status. Valid: ${VALID_STATUSES.join(', ')}`)
-        break
-      }
-      const message = createStatusNotification(connectorId, statusValue)
-      await connection.send(message)
-      setConnectorStatus(charger, connectorId, statusValue)
-      output.outgoing('StatusNotification', `connector=${connectorId} status=${statusValue}`)
-      break
-    }
-
-    case 'authorize': {
-      if (args.length < 1) {
-        output.error('Usage: authorize <idTag>')
-        break
-      }
-      const message = createAuthorize(args[0])
-      await connection.send(message)
-      output.outgoing('Authorize', `idTag=${args[0]}`)
-      break
-    }
-
-    case 'start': {
-      if (args.length < 3) {
-        output.error('Usage: start <connectorId> <idTag> <meterStart>')
-        break
-      }
-      const connectorId = parseInt(args[0], 10)
-      const idTag = args[1]
-      const meterStart = parseInt(args[2], 10)
-      if (isNaN(connectorId) || isNaN(meterStart)) {
-        output.error('connectorId and meterStart must be numbers')
-        break
-      }
-      const message = createStartTransaction(connectorId, idTag, meterStart)
-      await connection.send(message)
-      output.outgoing('StartTransaction', `connector=${connectorId} idTag=${idTag} meter=${meterStart}Wh`)
-      break
-    }
-
-    case 'stop': {
-      if (args.length < 2) {
-        output.error('Usage: stop <transactionId> <meterStop>')
-        break
-      }
-      const txId = parseInt(args[0], 10)
-      const meterStop = parseInt(args[1], 10)
-      if (isNaN(txId) || isNaN(meterStop)) {
-        output.error('transactionId and meterStop must be numbers')
-        break
-      }
-      const message = createStopTransaction(txId, meterStop)
-      await connection.send(message)
-      output.outgoing('StopTransaction', `txId=${txId} meter=${meterStop}Wh`)
-      break
-    }
-
-    case 'meter': {
-      if (args.length < 4) {
-        output.error('Usage: meter <connectorId> <transactionId> <energyWh> <powerW>')
-        break
-      }
-      const connectorId = parseInt(args[0], 10)
-      const txId = parseInt(args[1], 10)
-      const energyWh = parseInt(args[2], 10)
-      const powerW = parseInt(args[3], 10)
-      if (isNaN(connectorId) || isNaN(txId) || isNaN(energyWh) || isNaN(powerW)) {
-        output.error('All arguments must be numbers')
-        break
-      }
-      const message = createMeterValues(connectorId, txId, { energyWh, powerW })
-      await connection.send(message)
-      output.outgoing('MeterValues', `connector=${connectorId} txId=${txId} energy=${energyWh}Wh power=${powerW}W`)
-      break
-    }
-
-    case 'data': {
-      if (args.length < 1) {
-        output.error('Usage: data <vendorId> [messageId] [data]')
-        break
-      }
-      const vendorId = args[0]
-      const messageId = args[1]
-      const data = args.slice(2).join(' ') || undefined
-      const message = createDataTransfer({ vendorId, messageId, data })
-      await connection.send(message)
-      output.outgoing('DataTransfer', `vendorId=${vendorId}${messageId ? ` messageId=${messageId}` : ''}`)
-      break
-    }
-
     case 'disconnect': {
       await connection.disconnect()
       output.status('Disconnected')
-      break
+      return
     }
-
     case 'help': {
       printHelp()
-      break
+      return
     }
-
     case 'exit':
     case 'quit': {
       output.status('Disconnecting...')
       await connection.disconnect()
       rl.close()
-      break
+      return
     }
+  }
 
-    default: {
-      output.error(`Unknown command: ${command}. Type "help" for available commands.`)
-      break
+  // Use shared command building for OCPP commands
+  const result = buildCommand(command, args, charger)
+  if (isCommandError(result)) {
+    output.error(result.error)
+    return
+  }
+
+  await connection.send(result.message)
+  output.outgoing(result.action, result.outgoing.includes(': ') ? result.outgoing.split(': ').slice(1).join(': ') : result.outgoing)
+
+  // Apply immediate side effects for status command
+  if (command === 'status' && args.length >= 2) {
+    const connectorId = parseInt(args[0], 10)
+    if (!isNaN(connectorId)) {
+      setConnectorStatus(charger, connectorId, args[1] as ChargePointStatus)
     }
   }
 }
 
+/** Print the command help table to the terminal. */
 function printHelp(): void {
   output.info('')
   output.info('Available commands:')

@@ -16,7 +16,7 @@ This file provides guidance to Claude Code when working with the sem repository.
 
 ## Project Structure
 
-```
+```Text
 src/
   cli.ts              # Entry point (#!/usr/bin/env node)
   repl.ts             # Interactive REPL with command dispatch
