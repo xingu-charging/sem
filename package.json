@@ -1,0 +1,55 @@
+{
+  "name": "@xingu-charging/sem",
+  "version": "0.1.0",
+  "description": "Headless CLI OCPP charger simulator for interactive testing and debugging",
+  "type": "module",
+  "bin": {
+    "sem": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xingu-charging/sem.git"
+  },
+  "dependencies": {
+    "chalk": "^5.4",
+    "commander": "^14.0",
+    "ws": "^8.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15",
+    "@types/ws": "^8.18",
+    "eslint": "^9.27",
+    "typescript": "^5.9",
+    "typescript-eslint": "^8.33"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "keywords": [
+    "xingu-charging",
+    "xingu",
+    "sem",
+    "ocpp",
+    "ev",
+    "charging",
+    "simulator",
+    "cli"
+  ],
+  "packageManager": "pnpm@9.15.0+sha512.76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c"
+}

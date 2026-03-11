@@ -1,0 +1,47 @@
+{
+  "name": "AC 7kW Wallbox",
+  "identity": {
+    "vendor": "Xingu",
+    "model": "AC-7K",
+    "serialNumber": "XNG-AC7K-001",
+    "firmwareVersion": "1.0.0"
+  },
+  "connection": {
+    "environments": {
+      "staging": "wss://ocpp-staging.xingu-charging.com",
+      "production": "wss://ocpp.xingu-charging.com"
+    },
+    "defaultEnvironment": "staging",
+    "chargerId": "SEM-AC7K-001",
+    "protocol": "1.6",
+    "username": "sem",
+    "password": "sem"
+  },
+  "capabilities": {
+    "maxPower": 7000,
+    "phases": 1,
+    "voltage": 230,
+    "maxCurrent": 32,
+    "features": ["RemoteTrigger", "FirmwareManagement"]
+  },
+  "connectors": [
+    {
+      "connectorId": 1,
+      "type": "Type2",
+      "format": "Socket",
+      "powerType": "AC_1_PHASE",
+      "maxPower": 7000,
+      "maxVoltage": 230,
+      "maxAmperage": 32
+    }
+  ],
+  "meterValueConfig": {
+    "sampleInterval": 30,
+    "measurands": [
+      "Energy.Active.Import.Register",
+      "Power.Active.Import",
+      "Current.Import",
+      "Voltage"
+    ]
+  }
+}

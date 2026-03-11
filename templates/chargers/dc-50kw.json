@@ -1,0 +1,47 @@
+{
+  "name": "DC 50kW Fast Charger",
+  "identity": {
+    "vendor": "Xingu",
+    "model": "DC-50K",
+    "serialNumber": "XNG-DC50K-001",
+    "firmwareVersion": "1.0.0"
+  },
+  "connection": {
+    "environments": {
+      "staging": "wss://ocpp-staging.xingu-charging.com",
+      "production": "wss://ocpp.xingu-charging.com"
+    },
+    "defaultEnvironment": "production",
+    "chargerId": "SEM-DC50K-001",
+    "protocol": "1.6",
+    "username": "sem",
+    "password": "sem"
+  },
+  "capabilities": {
+    "maxPower": 50000,
+    "phases": 3,
+    "voltage": 500,
+    "maxCurrent": 125,
+    "features": ["RemoteTrigger", "FirmwareManagement", "SmartCharging"]
+  },
+  "connectors": [
+    {
+      "connectorId": 1,
+      "type": "CCS2",
+      "format": "Cable",
+      "powerType": "DC",
+      "maxPower": 50000,
+      "maxVoltage": 500,
+      "maxAmperage": 125
+    }
+  ],
+  "meterValueConfig": {
+    "sampleInterval": 15,
+    "measurands": [
+      "Energy.Active.Import.Register",
+      "Power.Active.Import",
+      "Current.Import",
+      "Voltage"
+    ]
+  }
+}

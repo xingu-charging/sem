@@ -1,0 +1,48 @@
+{
+  "name": "DC 150kW Ultra-Fast Charger",
+  "identity": {
+    "vendor": "Xingu",
+    "model": "DC-150K",
+    "serialNumber": "XNG-DC150K-001",
+    "firmwareVersion": "1.0.0"
+  },
+  "connection": {
+    "environments": {
+      "staging": "wss://ocpp-staging.xingu-charging.com",
+      "production": "wss://ocpp.xingu-charging.com"
+    },
+    "defaultEnvironment": "staging",
+    "chargerId": "SEM-DC150K-001",
+    "protocol": "1.6",
+    "username": "sem",
+    "password": "sem"
+  },
+  "capabilities": {
+    "maxPower": 150000,
+    "phases": 3,
+    "voltage": 500,
+    "maxCurrent": 300,
+    "features": ["RemoteTrigger", "FirmwareManagement", "SmartCharging"]
+  },
+  "connectors": [
+    {
+      "connectorId": 1,
+      "type": "CCS2",
+      "format": "Cable",
+      "powerType": "DC",
+      "maxPower": 150000,
+      "maxVoltage": 500,
+      "maxAmperage": 300
+    }
+  ],
+  "meterValueConfig": {
+    "sampleInterval": 10,
+    "measurands": [
+      "Energy.Active.Import.Register",
+      "Power.Active.Import",
+      "Current.Import",
+      "Voltage",
+      "SoC"
+    ]
+  }
+}
