@@ -1,6 +1,6 @@
 {
   "name": "@xingu-charging/sem",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Headless CLI OCPP charger simulator for interactive testing and debugging",
   "type": "module",
   "bin": {

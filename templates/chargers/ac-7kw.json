@@ -8,8 +8,8 @@
   },
   "connection": {
     "environments": {
-      "staging": "wss://ocpp-staging.xingu-charging.com",
-      "production": "wss://ocpp.xingu-charging.com"
+      "staging": "wss://ocpp-staging.example.com",
+      "production": "wss://ocpp.example.com"
     },
     "defaultEnvironment": "staging",
     "chargerId": "SEM-AC7K-001",
