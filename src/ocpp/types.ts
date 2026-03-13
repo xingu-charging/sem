@@ -506,3 +506,111 @@ export type ClearCacheStatus = 'Accepted' | 'Rejected'
 export interface ClearCacheResponse {
   status: ClearCacheStatus
 }
+
+// =============================================================================
+// SetChargingProfile (Server -> Charger) - OCPP 1.6
+// =============================================================================
+
+// Charging Profile Purpose Type
+export type ChargingProfilePurposeType =
+  | 'ChargePointMaxProfile'
+  | 'TxDefaultProfile'
+  | 'TxProfile'
+
+// Charging Profile Kind Type
+export type ChargingProfileKindType =
+  | 'Absolute'
+  | 'Recurring'
+  | 'Relative'
+
+// Recurrency Kind Type
+export type RecurrencyKindType = 'Daily' | 'Weekly'
+
+// Charging Rate Unit Type
+export type ChargingRateUnitType = 'A' | 'W'
+
+// Charging Schedule Period
+export interface ChargingSchedulePeriod {
+  startPeriod: number
+  limit: number
+  numberPhases?: number
+}
+
+// Charging Schedule
+export interface ChargingSchedule {
+  duration?: number
+  startSchedule?: string
+  chargingRateUnit: ChargingRateUnitType
+  chargingSchedulePeriod: ChargingSchedulePeriod[]
+  minChargingRate?: number
+}
+
+// Charging Profile
+export interface ChargingProfile {
+  chargingProfileId: number
+  transactionId?: number
+  stackLevel: number
+  chargingProfilePurpose: ChargingProfilePurposeType
+  chargingProfileKind: ChargingProfileKindType
+  recurrencyKind?: RecurrencyKindType
+  validFrom?: string
+  validTo?: string
+  chargingSchedule: ChargingSchedule
+}
+
+// SetChargingProfile Request (OCPP 1.6)
+export interface SetChargingProfileRequest {
+  connectorId: number
+  csChargingProfiles: ChargingProfile
+}
+
+// SetChargingProfile Status
+export type ChargingProfileStatus = 'Accepted' | 'Rejected' | 'NotSupported'
+
+// SetChargingProfile Response (OCPP 1.6)
+export interface SetChargingProfileResponse {
+  status: ChargingProfileStatus
+}
+
+// =============================================================================
+// ReserveNow (Server -> Charger) - OCPP 1.6
+// =============================================================================
+
+// ReserveNow Request (OCPP 1.6)
+export interface ReserveNowRequest {
+  connectorId: number
+  expiryDate: string
+  idTag: string
+  parentIdTag?: string
+  reservationId: number
+}
+
+// Reservation Status
+export type ReservationStatus =
+  | 'Accepted'
+  | 'Faulted'
+  | 'Occupied'
+  | 'Rejected'
+  | 'Unavailable'
+
+// ReserveNow Response (OCPP 1.6)
+export interface ReserveNowResponse {
+  status: ReservationStatus
+}
+
+// =============================================================================
+// CancelReservation (Server -> Charger) - OCPP 1.6
+// =============================================================================
+
+// CancelReservation Request (OCPP 1.6)
+export interface CancelReservationRequest {
+  reservationId: number
+}
+
+// CancelReservation Status
+export type CancelReservationStatus = 'Accepted' | 'Rejected'
+
+// CancelReservation Response (OCPP 1.6)
+export interface CancelReservationResponse {
+  status: CancelReservationStatus
+}

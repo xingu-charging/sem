@@ -744,3 +744,56 @@ export function createDataTransferResponse(
   }
   return [MessageType.CALLRESULT, messageId, response]
 }
+
+// =============================================================================
+// SetChargingProfile Response Builder
+// =============================================================================
+
+export type ChargingProfileStatus = 'Accepted' | 'Rejected' | 'NotSupported'
+
+/**
+ * Create SetChargingProfile response
+ */
+export function createSetChargingProfileResponse(
+  messageId: string,
+  status: ChargingProfileStatus
+): OcppCallResultMessage {
+  return [MessageType.CALLRESULT, messageId, { status }]
+}
+
+// =============================================================================
+// ReserveNow Response Builder
+// =============================================================================
+
+export type ReservationStatus =
+  | 'Accepted'
+  | 'Faulted'
+  | 'Occupied'
+  | 'Rejected'
+  | 'Unavailable'
+
+/**
+ * Create ReserveNow response
+ */
+export function createReserveNowResponse(
+  messageId: string,
+  status: ReservationStatus
+): OcppCallResultMessage {
+  return [MessageType.CALLRESULT, messageId, { status }]
+}
+
+// =============================================================================
+// CancelReservation Response Builder
+// =============================================================================
+
+export type CancelReservationStatus = 'Accepted' | 'Rejected'
+
+/**
+ * Create CancelReservation response
+ */
+export function createCancelReservationResponse(
+  messageId: string,
+  status: CancelReservationStatus
+): OcppCallResultMessage {
+  return [MessageType.CALLRESULT, messageId, { status }]
+}

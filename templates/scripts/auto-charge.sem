@@ -1,0 +1,16 @@
+# Auto charge session
+# Uses the charge command to run a complete automated session.
+# Usage: sem script templates/scripts/auto-charge.sem --charger templates/chargers/ac-7kw.json
+
+# Boot the charger
+send boot
+wait 1
+send status 1 Available
+wait 2
+
+# Run an automated 60-second charge session at 7kW
+charge 1 TOKEN001 60 7000
+wait 2
+
+# Run a second session at lower power
+charge 1 TOKEN002 30 3500

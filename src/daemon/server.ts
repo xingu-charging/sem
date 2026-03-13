@@ -14,9 +14,10 @@ import fs from 'node:fs'
 import { OcppConnection } from '../ocpp/connection.js'
 import { ConnectionState, MessageType, type OcppMessage } from '../ocpp/types.js'
 import { loadChargerTemplate, setTransactionId, setConnectorStatus, type LoadedCharger } from '../lib/charger.js'
-import { handleServerMessage } from '../lib/serverHandler.js'
+import { handleServerMessage, setServerHandlerConfig } from '../lib/serverHandler.js'
 import { buildCommand, formatCallResult, isCommandError } from '../commands.js'
 import { createStatusNotification } from '../ocpp/messages.js'
+import { startChargeSession, stopChargeSession, getActiveSession, gracefulShutdown, type SendAndWaitFn } from '../lib/chargeSession.js'
 import type { DaemonRequest, DaemonResponse, SessionMetadata } from './types.js'
 import {
   SESSION_DIR,
@@ -180,6 +181,15 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     }
   }
 
+  // Always configure server handler with sendAndWait so RemoteStart/Stop work
+  const daemonSendAndWait = createDaemonSendAndWait(connection, pendingMessages, log)
+  setServerHandlerConfig({
+    autoCharge: true,
+    sendAndWait: daemonSendAndWait,
+    log
+  })
+  log('Server command side effects enabled')
+
   // Ensure session directory exists
   fs.mkdirSync(SESSION_DIR, { recursive: true })
 
@@ -225,9 +235,9 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
 
   // Graceful shutdown
   async function shutdown(): Promise<void> {
-    log('Shutting down...')
+    log('Shutting down gracefully...')
     server.close()
-    await connection.disconnect()
+    await gracefulShutdown(connection, charger, daemonSendAndWait, log)
     cleanupFiles(options.sessionId)
     logStream.end()
     process.exit(0)
@@ -295,7 +305,7 @@ function handleRequest(
       break
     }
     case 'shutdown': {
-      sendResponse(socket, { type: 'result', success: true, output: ['Shutting down...'] })
+      sendResponse(socket, { type: 'result', success: true, output: ['Shutting down gracefully...'] })
       // Give response time to flush before exiting
       setTimeout(() => {
         process.emit('SIGTERM' as NodeJS.Signals)
@@ -305,6 +315,19 @@ function handleRequest(
     default: {
       sendResponse(socket, { type: 'error', message: `Unknown request type` })
     }
+  }
+}
+
+/** Create a SendAndWaitFn for charge sessions in daemon mode. */
+function createDaemonSendAndWait(
+  connection: OcppConnection,
+  pendingMessages: Map<string, PendingResponse>,
+  log: (msg: string) => void
+): SendAndWaitFn {
+  return async (action: string, message: import('../ocpp/types.js').OcppCallMessage): Promise<Record<string, unknown>> => {
+    const payload = await sendAndWaitRaw(connection, pendingMessages, action, message)
+    log(`[->] ${action}: ${JSON.stringify(message[3])}`)
+    return payload
   }
 }
 
@@ -319,6 +342,71 @@ async function handleCommandRequest(
   log: (msg: string) => void
 ): Promise<void> {
   try {
+    // Handle charge session commands
+    if (command === 'charge') {
+      if (args.length < 2) {
+        sendResponse(socket, { type: 'error', message: 'Usage: charge <connectorId> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh]' })
+        return
+      }
+      const connectorId = parseInt(args[0], 10)
+      const idTag = args[1]
+      const duration = args[2] ? parseInt(args[2], 10) : 60
+      const powerW = args[3] ? parseInt(args[3], 10) : (charger.config.capabilities?.maxPower ?? 7000)
+      const meterInterval = args[4] ? parseInt(args[4], 10) : 30
+      const socStart = args[5] ? parseInt(args[5], 10) : undefined
+      const socEnd = args[6] ? parseInt(args[6], 10) : undefined
+      const batteryCapacityWh = args[7] ? parseInt(args[7], 10) : undefined
+
+      if (isNaN(connectorId) || isNaN(duration) || isNaN(powerW) || isNaN(meterInterval)) {
+        sendResponse(socket, { type: 'error', message: 'Numeric arguments must be valid numbers' })
+        return
+      }
+
+      const sendAndWait = createDaemonSendAndWait(connection, pendingMessages, log)
+      const session = startChargeSession(connection, charger, sendAndWait, log, {
+        connectorId,
+        idTag,
+        duration,
+        powerW,
+        meterInterval,
+        meterStart: 0,
+        socStart,
+        socEnd,
+        batteryCapacityWh
+      })
+      sendResponse(socket, {
+        type: 'result',
+        success: true,
+        output: [`Charge session started: connector=${connectorId} idTag=${idTag} duration=${duration}s power=${powerW}W`]
+      })
+      // Let it run in the background
+      session.completion.catch((err) => {
+        log(`Charge session error: ${err}`)
+      })
+      return
+    }
+
+    if (command === 'stop-charge') {
+      if (args.length < 1) {
+        sendResponse(socket, { type: 'error', message: 'Usage: stop-charge <connectorId>' })
+        return
+      }
+      const connectorId = parseInt(args[0], 10)
+      if (isNaN(connectorId)) {
+        sendResponse(socket, { type: 'error', message: 'connectorId must be a number' })
+        return
+      }
+      const existing = getActiveSession(charger.chargerId, connectorId)
+      if (!existing) {
+        sendResponse(socket, { type: 'error', message: `No active charge session on connector ${connectorId}` })
+        return
+      }
+      const sendAndWait = createDaemonSendAndWait(connection, pendingMessages, log)
+      await stopChargeSession(charger.chargerId, connectorId, connection, charger, sendAndWait, log)
+      sendResponse(socket, { type: 'result', success: true, output: [`Charge session on connector ${connectorId} stopped`] })
+      return
+    }
+
     const lines = await sendAndWait(connection, charger, pendingMessages, command, args)
     sendResponse(socket, { type: 'result', success: true, output: lines })
   } catch (err) {

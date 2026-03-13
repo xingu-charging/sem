@@ -11,7 +11,7 @@
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { ChargePointStatus } from '../ocpp/types.js'
+import type { ChargePointStatus, ChargingProfile } from '../ocpp/types.js'
 import type { ChargerConfig } from '../ocpp/serverMessages.js'
 
 /** Raw charger template JSON structure. Supports both sim format (OCPP field names) and simplified format. */
@@ -68,6 +68,15 @@ interface ChargerTemplate {
   ocppConfiguration?: Record<string, string>
 }
 
+/** Reservation state for a connector. */
+export interface Reservation {
+  reservationId: number
+  connectorId: number
+  idTag: string
+  expiryDate: string
+  parentIdTag?: string
+}
+
 /** Mutable runtime state of a charger session. */
 export interface ChargerState {
   /** Whether the WebSocket is currently connected */
@@ -78,6 +87,10 @@ export interface ChargerState {
   connectorStates: Map<number, ChargePointStatus>
   /** OCPP configuration key overrides applied via ChangeConfiguration */
   configOverrides: Map<string, string>
+  /** Active reservations (reservationId -> Reservation) */
+  reservations: Map<number, Reservation>
+  /** Active charging profiles (connectorId -> ChargingProfile[]) */
+  chargingProfiles: Map<number, ChargingProfile[]>
 }
 
 /** A fully resolved charger ready for connection, with all template values normalized. */
@@ -195,7 +208,9 @@ export function loadChargerTemplate(
       connected: false,
       transactionId: null,
       connectorStates,
-      configOverrides: new Map()
+      configOverrides: new Map(),
+      reservations: new Map(),
+      chargingProfiles: new Map()
     }
   }
 }
@@ -208,6 +223,42 @@ export function setTransactionId(charger: LoadedCharger, txId: number | null): v
 /** Update the cached status of a connector after sending StatusNotification. */
 export function setConnectorStatus(charger: LoadedCharger, connectorId: number, status: ChargePointStatus): void {
   charger.state.connectorStates.set(connectorId, status)
+}
+
+/** Add a reservation to the charger state. */
+export function addReservation(charger: LoadedCharger, reservation: Reservation): void {
+  charger.state.reservations.set(reservation.reservationId, reservation)
+}
+
+/** Remove a reservation from the charger state. */
+export function removeReservation(charger: LoadedCharger, reservationId: number): boolean {
+  return charger.state.reservations.delete(reservationId)
+}
+
+/** Get a reservation by ID. */
+export function getReservation(charger: LoadedCharger, reservationId: number): Reservation | undefined {
+  return charger.state.reservations.get(reservationId)
+}
+
+/** Find a reservation for a specific connector. */
+export function getReservationForConnector(charger: LoadedCharger, connectorId: number): Reservation | undefined {
+  for (const reservation of charger.state.reservations.values()) {
+    if (reservation.connectorId === connectorId) {
+      return reservation
+    }
+  }
+  return undefined
+}
+
+/** Add a charging profile to a connector. */
+export function addChargingProfile(charger: LoadedCharger, connectorId: number, profile: ChargingProfile): void {
+  const profiles = charger.state.chargingProfiles.get(connectorId) ?? []
+  // Replace existing profile at same stack level and purpose
+  const filtered = profiles.filter(
+    (p) => !(p.stackLevel === profile.stackLevel && p.chargingProfilePurpose === profile.chargingProfilePurpose)
+  )
+  filtered.push(profile)
+  charger.state.chargingProfiles.set(connectorId, filtered)
 }
 
 /** Apply a configuration change from ChangeConfiguration. Updates both the override map and active config. */

@@ -1,0 +1,20 @@
+# Remote start charging session
+# Boots the charger, then waits for a RemoteStartTransaction from the server.
+# When using --auto-charge, the charger will automatically start a charge session.
+# Without --auto-charge, you must manually start after receiving the remote start.
+# Usage: sem script templates/scripts/happy-remote-start.sem --charger templates/chargers/ac-7kw.json
+
+# Boot the charger
+send boot
+wait 1
+
+# Set connector to available
+send status 1 Available
+wait 1
+
+# Wait for RemoteStartTransaction from the server
+# Timeout after 120 seconds
+expect RemoteStartTransaction 120
+
+# If not using --auto-charge, run the charge manually:
+charge 1 TOKEN001 60 7000

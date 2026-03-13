@@ -16,6 +16,7 @@ import { loadChargerTemplate } from './lib/charger.js'
 import { setOutputConfig } from './lib/output.js'
 import * as output from './lib/output.js'
 import { startRepl } from './repl.js'
+import { parseScript, executeScript } from './lib/scriptRunner.js'
 import { startDaemon } from './daemon/manager.js'
 import { sendCommand, getStatus, shutdown, readLogs, listSessions } from './daemon/client.js'
 import { runDaemon } from './daemon/server.js'
@@ -64,6 +65,20 @@ program
         output.status('Connected')
       } else if (state === ConnectionState.DISCONNECTED) {
         charger.state.connected = false
+        output.error('Disconnected from gateway')
+      } else if (state === ConnectionState.ERROR) {
+        charger.state.connected = false
+        output.error('Connection error')
+      }
+    })
+
+    connection.on('log', (log) => {
+      if (log.level === 'error') {
+        output.error(log.message)
+      } else if (log.level === 'warn') {
+        output.error(log.message)
+      } else {
+        output.info(log.message)
       }
     })
 
@@ -206,6 +221,142 @@ program
     for (const session of sessions) {
       const status = session.alive ? 'running' : 'dead'
       output.info(`${session.chargerId}  ${status}  pid=${session.pid}  ${session.name}  ${session.url}  started=${session.startedAt}`)
+    }
+  })
+
+// Start a charge session on a running daemon
+program
+  .command('charge <id> <connectorId> <idTag>')
+  .description('Start an automated charge session on a running session')
+  .option('--duration <seconds>', 'Charging duration in seconds', '60')
+  .option('--power <watts>', 'Charging power in watts')
+  .option('--interval <seconds>', 'Meter value interval in seconds', '30')
+  .option('--soc-start <percent>', 'Starting SoC (DC only)', '20')
+  .option('--soc-end <percent>', 'Target SoC (DC only)', '80')
+  .option('--battery <wh>', 'Battery capacity in Wh (DC only)', '60000')
+  .action(async (id: string, connectorId: string, idTag: string, options: { duration: string; power?: string; interval: string; socStart: string; socEnd: string; battery: string }) => {
+    try {
+      const args = [connectorId, idTag, options.duration]
+      if (options.power) args.push(options.power)
+      else args.push('7000')
+      args.push(options.interval)
+      args.push(options.socStart, options.socEnd, options.battery)
+      const response = await sendCommand(id, 'charge', args)
+      if (response.type === 'result') {
+        for (const line of response.output) {
+          console.log(line)
+        }
+      } else if (response.type === 'error') {
+        output.error(response.message)
+        process.exit(1)
+      }
+    } catch (err) {
+      output.error(`${err instanceof Error ? err.message : err}`)
+      process.exit(1)
+    }
+  })
+
+// Run a script file
+program
+  .command('script <file>')
+  .description('Run a .sem script file for automated test scenarios')
+  .requiredOption('--charger <path>', 'Path to charger JSON template')
+  .option('--env <name>', 'Environment override (staging|production|local)')
+  .option('--url <url>', 'WebSocket URL override')
+  .option('--verbose', 'Show raw OCPP message JSON')
+  .option('--quiet', 'Minimal output')
+  .action(async (file: string, options: { charger: string; env?: string; url?: string; verbose?: boolean; quiet?: boolean }) => {
+    if (options.verbose) {
+      setOutputConfig({ verbosity: 'verbose' })
+    } else if (options.quiet) {
+      setOutputConfig({ verbosity: 'quiet' })
+    }
+
+    let charger
+    try {
+      charger = loadChargerTemplate(options.charger, options.env, options.url)
+    } catch (err) {
+      output.error(`Failed to load charger template: ${err}`)
+      process.exit(1)
+    }
+
+    let instructions
+    try {
+      instructions = parseScript(file)
+    } catch (err) {
+      output.error(`Failed to parse script: ${err}`)
+      process.exit(1)
+    }
+
+    output.status(`Charger: ${charger.name} (${charger.chargerId})`)
+    output.status(`Script: ${file} (${instructions.length} instructions)`)
+    output.info('')
+
+    const connection = new OcppConnection()
+
+    connection.on('stateChange', (state: ConnectionState) => {
+      if (state === ConnectionState.CONNECTED) {
+        charger.state.connected = true
+        output.status('Connected')
+      } else if (state === ConnectionState.DISCONNECTED) {
+        charger.state.connected = false
+        output.error('Disconnected from gateway')
+      } else if (state === ConnectionState.ERROR) {
+        charger.state.connected = false
+        output.error('Connection error')
+      }
+    })
+
+    connection.on('log', (log) => {
+      if (log.level === 'error') {
+        output.error(log.message)
+      } else if (log.level === 'warn') {
+        output.error(log.message)
+      } else {
+        output.info(log.message)
+      }
+    })
+
+    output.status('Connecting...')
+    try {
+      await connection.connect({
+        url: charger.url,
+        protocol: charger.protocol,
+        auth: charger.auth
+      })
+    } catch (err) {
+      output.error(`Connection failed: ${err}`)
+      process.exit(1)
+    }
+
+    try {
+      await executeScript(instructions, connection, charger)
+    } catch (err) {
+      output.error(`Script execution failed: ${err}`)
+    }
+
+    await connection.disconnect()
+    process.exit(0)
+  })
+
+// Stop a charge session on a running daemon
+program
+  .command('stop-charge <id> <connectorId>')
+  .description('Stop an active charge session on a running session')
+  .action(async (id: string, connectorId: string) => {
+    try {
+      const response = await sendCommand(id, 'stop-charge', [connectorId])
+      if (response.type === 'result') {
+        for (const line of response.output) {
+          console.log(line)
+        }
+      } else if (response.type === 'error') {
+        output.error(response.message)
+        process.exit(1)
+      }
+    } catch (err) {
+      output.error(`${err instanceof Error ? err.message : err}`)
+      process.exit(1)
     }
   })
 

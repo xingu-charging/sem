@@ -1,0 +1,53 @@
+# Fault recovery scenario
+# Simulates a connector fault followed by recovery and resumed charging.
+# Usage: sem script templates/scripts/fault-recovery.sem --charger templates/chargers/ac-7kw.json
+
+# Boot and set available
+send boot
+wait 1
+send status 1 Available
+wait 2
+
+# Start a normal charging session
+send authorize TOKEN001
+wait 1
+send status 1 Preparing
+send start 1 TOKEN001 0
+send status 1 Charging
+wait 2
+
+# Send some meter values
+send meter 1 $txId 500 7000
+wait 5
+
+# Simulate a ground fault
+send status 1 Faulted GroundFailure
+wait 3
+
+# Stop transaction due to fault
+send stop $txId 500
+wait 1
+
+# Fault clears after some time
+wait 5
+send status 1 Available NoError
+wait 2
+
+# Resume with a new charging session
+send authorize TOKEN001
+wait 1
+send status 1 Preparing
+send start 1 TOKEN001 0
+send status 1 Charging
+wait 2
+
+send meter 1 $txId 500 7000
+wait 10
+send meter 1 $txId 2000 7000
+wait 10
+
+# Normal stop
+send stop $txId 2000
+send status 1 Finishing
+wait 2
+send status 1 Available

@@ -1,0 +1,30 @@
+# Firmware update flow
+# Simulates a complete firmware update sequence with status notifications.
+# Usage: sem script templates/scripts/firmware-update.sem --charger templates/chargers/ac-7kw.json
+
+# Boot the charger
+send boot
+wait 1
+send status 1 Available
+wait 2
+
+# Start firmware download
+send firmware-status Downloading
+wait 5
+
+# Download complete
+send firmware-status Downloaded
+wait 2
+
+# Begin installation
+send firmware-status Installing
+wait 5
+
+# Installation complete
+send firmware-status Installed
+wait 2
+
+# Reboot after firmware install
+send boot
+wait 1
+send status 1 Available

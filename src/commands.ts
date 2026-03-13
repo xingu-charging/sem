@@ -8,7 +8,7 @@
  * https://github.com/xingu-charging/sem
  */
 
-import type { OcppCallMessage, ChargePointStatus } from './ocpp/types.js'
+import type { OcppCallMessage, ChargePointStatus, ChargePointErrorCode, DiagnosticsStatus, FirmwareStatus } from './ocpp/types.js'
 import {
   createBootNotification,
   createHeartbeat,
@@ -17,13 +17,31 @@ import {
   createStartTransaction,
   createStopTransaction,
   createMeterValues,
-  createDataTransfer
+  createDataTransfer,
+  createDiagnosticsStatusNotification,
+  createFirmwareStatusNotification
 } from './ocpp/messages.js'
 import type { LoadedCharger } from './lib/charger.js'
 
 const VALID_STATUSES: ChargePointStatus[] = [
   'Available', 'Preparing', 'Charging', 'SuspendedEVSE',
   'SuspendedEV', 'Finishing', 'Reserved', 'Unavailable', 'Faulted'
+]
+
+const VALID_ERROR_CODES: ChargePointErrorCode[] = [
+  'NoError', 'ConnectorLockFailure', 'EVCommunicationError', 'GroundFailure',
+  'HighTemperature', 'InternalError', 'LocalListConflict', 'OtherError',
+  'OverCurrentFailure', 'OverVoltage', 'PowerMeterFailure', 'PowerSwitchFailure',
+  'ReaderFailure', 'ResetFailure', 'UnderVoltage', 'WeakSignal'
+]
+
+const VALID_FIRMWARE_STATUSES: FirmwareStatus[] = [
+  'Downloaded', 'DownloadFailed', 'Downloading', 'Idle',
+  'InstallationFailed', 'Installing', 'Installed'
+]
+
+const VALID_DIAGNOSTICS_STATUSES: DiagnosticsStatus[] = [
+  'Idle', 'Uploaded', 'UploadFailed', 'Uploading'
 ]
 
 /** Successful command build result containing the OCPP message ready to send. */
@@ -91,21 +109,26 @@ export function buildCommand(
 
     case 'status': {
       if (args.length < 2) {
-        return { error: `Usage: status <connectorId> <status>\n  Valid statuses: ${VALID_STATUSES.join(', ')}` }
+        return { error: `Usage: status <connectorId> <status> [errorCode]\n  Valid statuses: ${VALID_STATUSES.join(', ')}\n  Valid error codes: ${VALID_ERROR_CODES.join(', ')}` }
       }
       const connectorId = parseInt(args[0], 10)
       const statusValue = args[1] as ChargePointStatus
+      const errorCode = (args[2] as ChargePointErrorCode) ?? 'NoError'
       if (isNaN(connectorId)) {
         return { error: 'connectorId must be a number' }
       }
       if (!VALID_STATUSES.includes(statusValue)) {
         return { error: `Invalid status. Valid: ${VALID_STATUSES.join(', ')}` }
       }
-      const message = createStatusNotification(connectorId, statusValue)
+      if (args[2] && !VALID_ERROR_CODES.includes(errorCode)) {
+        return { error: `Invalid error code. Valid: ${VALID_ERROR_CODES.join(', ')}` }
+      }
+      const message = createStatusNotification(connectorId, statusValue, errorCode)
+      const errorSuffix = errorCode !== 'NoError' ? ` errorCode=${errorCode}` : ''
       return {
         action: 'StatusNotification',
         message,
-        outgoing: `StatusNotification: connector=${connectorId} status=${statusValue}`
+        outgoing: `StatusNotification: connector=${connectorId} status=${statusValue}${errorSuffix}`
       }
     }
 
@@ -190,8 +213,40 @@ export function buildCommand(
       }
     }
 
+    case 'firmware-status': {
+      if (args.length < 1) {
+        return { error: `Usage: firmware-status <status>\n  Valid statuses: ${VALID_FIRMWARE_STATUSES.join(', ')}` }
+      }
+      const fwStatus = args[0] as FirmwareStatus
+      if (!VALID_FIRMWARE_STATUSES.includes(fwStatus)) {
+        return { error: `Invalid firmware status. Valid: ${VALID_FIRMWARE_STATUSES.join(', ')}` }
+      }
+      const message = createFirmwareStatusNotification(fwStatus)
+      return {
+        action: 'FirmwareStatusNotification',
+        message,
+        outgoing: `FirmwareStatusNotification: status=${fwStatus}`
+      }
+    }
+
+    case 'diagnostics-status': {
+      if (args.length < 1) {
+        return { error: `Usage: diagnostics-status <status>\n  Valid statuses: ${VALID_DIAGNOSTICS_STATUSES.join(', ')}` }
+      }
+      const diagStatus = args[0] as DiagnosticsStatus
+      if (!VALID_DIAGNOSTICS_STATUSES.includes(diagStatus)) {
+        return { error: `Invalid diagnostics status. Valid: ${VALID_DIAGNOSTICS_STATUSES.join(', ')}` }
+      }
+      const message = createDiagnosticsStatusNotification(diagStatus)
+      return {
+        action: 'DiagnosticsStatusNotification',
+        message,
+        outgoing: `DiagnosticsStatusNotification: status=${diagStatus}`
+      }
+    }
+
     default:
-      return { error: `Unknown command: ${command}. Valid commands: boot, heartbeat, status, authorize, start, stop, meter, data` }
+      return { error: `Unknown command: ${command}. Valid commands: boot, heartbeat, status, authorize, start, stop, meter, data, firmware-status, diagnostics-status` }
   }
 }
 

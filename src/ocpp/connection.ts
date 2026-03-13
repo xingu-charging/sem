@@ -105,6 +105,12 @@ export class OcppConnection {
           this.handleMessage(data)
         })
 
+        // Log ping events from gateway (gateway pings every 30s to detect dead connections)
+        // The ws library auto-sends pong, but logging helps diagnose connection issues
+        this.ws.on('ping', () => {
+          this.emit('log', { level: 'info', message: 'Gateway ping received (pong auto-sent)' })
+        })
+
         this.ws.on('error', (error: Error) => {
           this.stopHeartbeat()
 
@@ -124,8 +130,10 @@ export class OcppConnection {
           reject(error)
         })
 
-        this.ws.on('close', () => {
-          this.stopHeartbeat()
+        this.ws.on('close', (code: number, reason: Buffer) => {
+          this.emit('log', { level: 'warn', message: `WebSocket closed: code=${code} reason=${reason.toString() || 'none'}` })
+          // Pause heartbeat (preserves interval for resume after reconnect)
+          this.pauseHeartbeat()
           this.setState(ConnectionState.DISCONNECTED)
 
           if (this.shouldReconnect) {
@@ -301,6 +309,8 @@ export class OcppConnection {
         this.emit('log', { level: 'info', message: 'Reconnecting...' })
         await this.connect(this.config)
         this.emit('log', { level: 'info', message: 'Reconnection successful' })
+        // Resume heartbeat if it was running before disconnect
+        this.resumeHeartbeat()
       } catch (_error) {
         this.emit('log', { level: 'error', message: 'Reconnection failed' })
         this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 30000)

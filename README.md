@@ -4,7 +4,35 @@ Headless CLI OCPP charger simulator for testing and debugging.
 
 `sem` simulates OCPP 1.6 charge points from the command line. No GUI required — runs on servers, in CI/CD pipelines, containers, or anywhere Node.js is available.
 
+## Modes
+
+sem has three operating modes:
+
+| Mode | Command | Use Case |
+|------|---------|----------|
+| [Daemon](#daemon-mode) | `sem start` | Background process, control via CLI commands. Best for persistent sessions. |
+| [REPL](#interactive-repl-mode) | `sem run` | Interactive terminal, type commands directly. Best for live debugging. |
+| [Script](#script-mode) | `sem script` | Run a `.sem` script file. Best for repeatable test scenarios. |
+
 ## Installation
+
+Install from npm:
+
+```bash
+pnpm add -g @xingu-charging/sem
+# or
+npm install -g @xingu-charging/sem
+# or
+yarn global add @xingu-charging/sem
+```
+
+Then run with a charger template:
+
+```bash
+sem start --charger node_modules/@xingu-charging/sem/templates/chargers/ac-7kw.json
+```
+
+### From Source
 
 ```bash
 git clone https://github.com/xingu-charging/sem.git
@@ -90,6 +118,38 @@ sem send SEM-AC7K-001 stop 42 5000
 
 Because each command returns the actual server response, you can read real values like `transactionId` from `StartTransaction` and use them in subsequent commands.
 
+### Automated Charge Sessions
+
+Start an automated charge session that runs the full OCPP flow (Authorize, Preparing, StartTransaction, Charging, MeterValues loop, StopTransaction, Available) in the background:
+
+```bash
+sem charge <session-id> <connectorId> <idTag> [options]
+```
+
+```bash
+# AC charge: 60 seconds at 7kW
+sem charge SEM-AC7K-001 1 TOKEN001 --duration 60 --power 7000
+
+# DC charge with SoC simulation: charge from 20% to 80%
+sem charge SEM-DC50K-001 1 TOKEN001 --duration 300 --power 50000 --soc-start 20 --soc-end 80
+
+# Stop a running charge session
+sem stop-charge SEM-DC50K-001 1
+```
+
+#### Charge Options
+
+```Text
+--duration <seconds>    Charging duration (default: 60, 0 = run until stopped)
+--power <watts>         Charging power (default: charger max or 7000)
+--interval <seconds>    Meter value interval (default: 30)
+--soc-start <percent>   Starting SoC for DC (default: 20)
+--soc-end <percent>     Target SoC for DC (default: 80)
+--battery <wh>          Battery capacity for DC (default: 60000)
+```
+
+DC chargers simulate a realistic charging curve: ramp-up below 20% SoC, constant power from 20-80%, and taper above 80%.
+
 ### View Logs
 
 Read the OCPP event log for a session. Logs include timestamps, all sent/received messages, server-initiated commands, heartbeats, and connection events.
@@ -129,30 +189,176 @@ Gracefully disconnect and clean up.
 sem stop <session-id>
 ```
 
-This disconnects the WebSocket, removes the Unix socket and PID file, and terminates the daemon process. The log file is preserved.
+This sends `StatusNotification(Unavailable)` for each connector, stops the heartbeat, disconnects the WebSocket, removes the Unix socket and PID file, and terminates the daemon process. The log file is preserved.
+
+## Interactive REPL Mode
+
+REPL mode provides an interactive terminal where you type OCPP commands directly and see responses in real time. Best for live debugging and exploring the OCPP protocol.
+
+```bash
+sem run --charger templates/chargers/ac-7kw.json
+```
+
+```Text
+Charger: AC 7kW Wallbox (SEM-AC7K-001)
+URL: wss://ocpp-staging.xingu-charging.com/SEM-AC7K-001
+Protocol: ocpp1.6
+Connected
+Type "help" for available commands.
+
+sem> boot
+[->] BootNotification: vendor=Xingu model=Wallbox-7K serial=SEM-AC7K-001
+[<-] BootNotification: status=Accepted interval=30
+
+sem> status 1 Available
+[->] StatusNotification: connector=1 status=Available
+[<-] StatusNotification: accepted
+
+sem> charge 1 TOKEN001 60 7000
+Charge session started on connector 1 (60s, 7000W)
+[auto] Authorizing idTag=TOKEN001...
+[auto] Authorization accepted
+[auto] Connector 1: Preparing
+...
+```
+
+Or pipe commands via stdin for scripted use:
+
+```bash
+echo -e "boot\nstatus 1 Available\nexit" | sem run --charger templates/chargers/ac-7kw.json --quiet
+```
+
+### REPL Options
+
+```Text
+--charger <path>    Path to charger JSON template (required)
+--env <name>        Environment override (staging|production|local)
+--url <url>         WebSocket URL override
+--verbose           Show raw OCPP message JSON
+--quiet             Minimal output
+```
+
+### REPL Commands
+
+All [OCPP commands](#ocpp-commands) are available, plus these REPL-specific commands:
+
+| Command | Arguments | Description |
+|---------|-----------|-------------|
+| `charge` | `<conn> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh]` | Run full automated charge session |
+| `stop-charge` | `<conn>` | Stop active charge session on a connector |
+| `shutdown` | | Graceful shutdown (stop sessions, set connectors Unavailable, disconnect) |
+| `disconnect` | | Close WebSocket connection immediately (no OCPP messages) |
+| `help` | | Show available commands |
+| `exit` / `quit` | | Graceful shutdown and exit |
+
+## Script Mode
+
+Script mode runs a `.sem` script file for automated, repeatable test scenarios. Scripts support OCPP commands, timing, server message expectations, and variable substitution.
+
+```bash
+sem script <file> --charger templates/chargers/ac-7kw.json
+```
+
+### Script Syntax
+
+```bash
+# Comments start with #
+
+# Send an OCPP command
+send boot
+send status 1 Available
+send authorize TOKEN001
+send start 1 TOKEN001 0
+
+# Wait a number of seconds
+wait 5
+
+# Wait for a server-initiated message (with timeout in seconds)
+expect RemoteStartTransaction 120
+
+# Use $txId to reference the transaction ID from the last StartTransaction
+send meter 1 $txId 1500 7000
+send stop $txId 5000
+
+# Run an automated charge session
+charge 1 TOKEN001 60 7000
+
+# Set custom variables
+set myTag TOKEN001
+send authorize $myTag
+```
+
+### Included Scripts
+
+| Script | Description |
+|--------|-------------|
+| `happy-rfid.sem` | Full RFID charge cycle: boot, authorize, charge, stop |
+| `happy-remote-start.sem` | Boot and wait for RemoteStartTransaction from server |
+| `auto-charge.sem` | Automated charge session with meter values |
+| `fault-recovery.sem` | Simulate charger fault and recovery |
+| `firmware-update.sem` | Firmware update flow with status notifications |
+
+```bash
+sem script templates/scripts/happy-rfid.sem --charger templates/chargers/ac-7kw.json
+```
+
+### Script Options
+
+```Text
+--charger <path>    Path to charger JSON template (required)
+--env <name>        Environment override (staging|production|local)
+--url <url>         WebSocket URL override
+--verbose           Show raw OCPP message JSON
+--quiet             Minimal output
+```
 
 ## OCPP Commands
 
-These commands are available via `sem send` (daemon mode) or the interactive REPL.
+These commands are available across all modes — via `sem send` (daemon), the REPL prompt, or `send` instructions in scripts.
 
 | Command | Arguments | Description |
 |---------|-----------|-------------|
 | `boot` | | Send BootNotification |
 | `heartbeat` | | Send Heartbeat |
-| `status` | `<connectorId> <status>` | Send StatusNotification |
+| `status` | `<connectorId> <status> [errorCode]` | Send StatusNotification |
 | `authorize` | `<idTag>` | Send Authorize |
 | `start` | `<connectorId> <idTag> <meterStart>` | Send StartTransaction |
 | `stop` | `<transactionId> <meterStop>` | Send StopTransaction |
 | `meter` | `<connectorId> <txId> <energyWh> <powerW>` | Send MeterValues |
 | `data` | `<vendorId> [messageId] [data]` | Send DataTransfer |
+| `firmware-status` | `<status>` | Send FirmwareStatusNotification |
+| `diagnostics-status` | `<status>` | Send DiagnosticsStatusNotification |
 
 ### Valid Status Values
 
 `Available`, `Preparing`, `Charging`, `SuspendedEVSE`, `SuspendedEV`, `Finishing`, `Reserved`, `Unavailable`, `Faulted`
 
+## Server-Initiated Messages
+
+sem automatically handles and responds to server-initiated OCPP messages. In daemon mode these are logged; in REPL mode they appear in the terminal in real time.
+
+| Server Action | Response | Side Effects |
+|---|---|---|
+| GetConfiguration | Config keys from template | |
+| ChangeConfiguration | Accept/Reject based on validation | Stores overrides in memory |
+| Reset | Accepted | Reconnects with boot sequence |
+| RemoteStartTransaction | Accepted | Starts automated charge session |
+| RemoteStopTransaction | Accepted | Stops active charge session |
+| TriggerMessage | Accepted | Sends the requested message |
+| GetDiagnostics | Filename | Simulates diagnostics upload flow |
+| UpdateFirmware | Accepted | Simulates firmware update flow |
+| ChangeAvailability | Accepted | Updates connector status |
+| ClearCache | Accepted | |
+| UnlockConnector | Unlocked | |
+| DataTransfer | Accepted | |
+| SetChargingProfile | Accepted | Stores profile in memory |
+| ReserveNow | Accepted/Rejected | Sets connector to Reserved |
+| CancelReservation | Accepted/Rejected | Returns connector to Available |
+| Unknown actions | CALLERROR NotImplemented | |
+
 ## Example Workflows
 
-### Full Charging Session
+### Full Charging Session (Daemon)
 
 ```bash
 # Start charger (auto-boots and sets connectors to Available)
@@ -182,6 +388,21 @@ sem send SEM-AC7K-001 status 1 Available
 
 # Done — stop the session
 sem stop SEM-AC7K-001
+```
+
+### Automated Charge Session (Daemon)
+
+```bash
+sem start --charger templates/chargers/dc-50kw.json
+sem charge SEM-DC50K-001 1 TOKEN001 --duration 120 --power 50000
+# Charge runs in background with meter values and SoC simulation
+
+# Check progress
+sem logs SEM-DC50K-001
+
+# Stop early if needed
+sem stop-charge SEM-DC50K-001 1
+sem stop SEM-DC50K-001
 ```
 
 ### Simulate a Faulted Charger
@@ -214,46 +435,6 @@ sem send SEM-DC50K-001 heartbeat
 sem stop SEM-AC7K-001
 sem stop SEM-DC50K-001
 ```
-
-## Server-Initiated Messages
-
-sem automatically handles and responds to server-initiated OCPP messages while the daemon is running:
-
-| Server Action | Response | Notes |
-|---|---|---|
-| GetConfiguration | Config keys from template | Supports specific key requests |
-| ChangeConfiguration | Accept/Reject based on validation | Stores overrides in memory |
-| Reset | Accepted | Hard and Soft reset |
-| RemoteStartTransaction | Accepted | |
-| RemoteStopTransaction | Accepted | |
-| TriggerMessage | Accepted | |
-| GetDiagnostics | Filename | |
-| UpdateFirmware | Accepted | |
-| ChangeAvailability | Accepted | |
-| ClearCache | Accepted | |
-| UnlockConnector | Unlocked | |
-| DataTransfer | Accepted | |
-| Unknown actions | CALLERROR NotImplemented | |
-
-All server-initiated messages are logged and visible via `sem logs`.
-
-## Interactive REPL Mode
-
-For quick interactive testing, sem also supports a REPL mode where you type commands directly:
-
-```bash
-sem --charger templates/chargers/ac-7kw.json
-```
-
-Or pipe commands via stdin for scripted use:
-
-```bash
-echo -e "boot\nstatus 1 Available\nexit" | sem --charger templates/chargers/ac-7kw.json --quiet
-```
-
-REPL-specific commands: `disconnect`, `help`, `exit`/`quit`.
-
-REPL options: `--verbose` (show raw JSON), `--quiet` (minimal output).
 
 ## Charger Template Format
 

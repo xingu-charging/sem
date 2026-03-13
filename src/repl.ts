@@ -9,11 +9,12 @@
 
 import { createInterface, type Interface } from 'node:readline'
 import { OcppConnection } from './ocpp/connection.js'
-import { MessageType, type OcppMessage } from './ocpp/types.js'
-import { handleServerMessage } from './lib/serverHandler.js'
+import { MessageType, type OcppMessage, type OcppCallMessage } from './ocpp/types.js'
+import { handleServerMessage, setServerHandlerConfig } from './lib/serverHandler.js'
 import { type LoadedCharger, setTransactionId, setConnectorStatus } from './lib/charger.js'
 import { buildCommand, formatCallResult, isCommandError } from './commands.js'
 import type { ChargePointStatus } from './ocpp/types.js'
+import { startChargeSession, stopChargeSession, getActiveSession, gracefulShutdown, type SendAndWaitFn } from './lib/chargeSession.js'
 import * as output from './lib/output.js'
 
 /** Help text definition for a single REPL command. */
@@ -26,15 +27,20 @@ interface CommandDef {
 const COMMANDS: Record<string, CommandDef> = {
   boot: { usage: 'boot', description: 'Send BootNotification' },
   heartbeat: { usage: 'heartbeat', description: 'Send Heartbeat' },
-  status: { usage: 'status <conn> <status>', description: 'Send StatusNotification' },
+  status: { usage: 'status <conn> <status> [errorCode]', description: 'Send StatusNotification' },
   authorize: { usage: 'authorize <idTag>', description: 'Send Authorize' },
   start: { usage: 'start <conn> <idTag> <meter>', description: 'Send StartTransaction' },
   stop: { usage: 'stop <txId> <meter>', description: 'Send StopTransaction' },
   meter: { usage: 'meter <conn> <txId> <wh> <w>', description: 'Send MeterValues' },
   data: { usage: 'data <vendorId> [msgId] [data]', description: 'Send DataTransfer' },
-  disconnect: { usage: 'disconnect', description: 'Close WebSocket connection' },
+  charge: { usage: 'charge <conn> <idTag> [duration] [power] [interval]', description: 'Run full charge session' },
+  'stop-charge': { usage: 'stop-charge <conn>', description: 'Stop active charge session' },
+  'firmware-status': { usage: 'firmware-status <status>', description: 'Send FirmwareStatusNotification' },
+  'diagnostics-status': { usage: 'diagnostics-status <status>', description: 'Send DiagnosticsStatusNotification' },
+  shutdown: { usage: 'shutdown', description: 'Graceful shutdown (stop sessions, set Unavailable, disconnect)' },
+  disconnect: { usage: 'disconnect', description: 'Close WebSocket connection (no OCPP messages)' },
   help: { usage: 'help', description: 'Show this help' },
-  exit: { usage: 'exit', description: 'Disconnect and exit' }
+  exit: { usage: 'exit', description: 'Graceful shutdown and exit' }
 }
 
 /**
@@ -52,6 +58,11 @@ export function startRepl(
   charger: LoadedCharger
 ): void {
   const pendingMessages = new Map<string, string>()
+
+  // Always configure server handler so RemoteStart/Stop/Reset etc. work
+  const sendAndWait = createReplSendAndWait(connection, pendingMessages, charger)
+  const log = (msg: string): void => { output.info(`[auto] ${msg}`) }
+  setServerHandlerConfig({ autoCharge: true, sendAndWait, log })
 
   // Wire up message events for correlation
   connection.on('messageSent', (message: OcppMessage) => {
@@ -116,7 +127,7 @@ export function startRepl(
     const args = parts.slice(1)
 
     try {
-      await executeCommand(command, args, connection, charger, rl)
+      await executeCommand(command, args, connection, charger, rl, pendingMessages)
     } catch (err) {
       output.error(`${err}`)
     }
@@ -149,13 +160,55 @@ function handleCallResult(
   }
 }
 
+/**
+ * Create a sendAndWait function for use with charge sessions in REPL mode.
+ * Registers a pending message, sends it, and waits for the correlated CALLRESULT.
+ */
+function createReplSendAndWait(
+  connection: OcppConnection,
+  pendingMessages: Map<string, string>,
+  _charger: LoadedCharger
+): SendAndWaitFn {
+  return async (action: string, message: OcppCallMessage): Promise<Record<string, unknown>> => {
+    const msgId = message[1]
+
+    const responsePromise = new Promise<Record<string, unknown>>((resolve, reject) => {
+      // Store a callback in the charger state for the REPL to resolve
+      const handler = (msg: OcppMessage): void => {
+        if (msg[0] === MessageType.CALLRESULT && msg[1] === msgId) {
+          connection.off('message', handler)
+          resolve(msg[2])
+        } else if (msg[0] === MessageType.CALLERROR && msg[1] === msgId) {
+          connection.off('message', handler)
+          reject(new Error(`${msg[2]}: ${msg[3]}`))
+        }
+      }
+      connection.on('message', handler)
+
+      setTimeout(() => {
+        connection.off('message', handler)
+        reject(new Error('OCPP response timeout'))
+      }, 10000)
+    })
+
+    pendingMessages.set(msgId, action)
+    await connection.send(message)
+    output.outgoing(action, `${action}`)
+
+    const payload = await responsePromise
+    // Side effects are already handled by the main message handler
+    return payload
+  }
+}
+
 /** Execute a single REPL command — handles REPL-only commands and delegates OCPP commands to buildCommand(). */
 async function executeCommand(
   command: string,
   args: string[],
   connection: OcppConnection,
   charger: LoadedCharger,
-  rl: Interface
+  rl: Interface,
+  pendingMessages: Map<string, string>
 ): Promise<void> {
   // Handle REPL-only commands
   switch (command) {
@@ -168,11 +221,87 @@ async function executeCommand(
       printHelp()
       return
     }
+    case 'shutdown': {
+      const sendAndWait = createReplSendAndWait(connection, pendingMessages, charger)
+      const log = (msg: string): void => { output.info(`[shutdown] ${msg}`) }
+      output.status('Shutting down gracefully...')
+      await gracefulShutdown(connection, charger, sendAndWait, log)
+      output.status('Shutdown complete')
+      return
+    }
     case 'exit':
     case 'quit': {
-      output.status('Disconnecting...')
-      await connection.disconnect()
+      const sendAndWait = createReplSendAndWait(connection, pendingMessages, charger)
+      const log = (msg: string): void => { output.info(`[shutdown] ${msg}`) }
+      output.status('Shutting down gracefully...')
+      await gracefulShutdown(connection, charger, sendAndWait, log)
+      output.status('Shutdown complete')
       rl.close()
+      return
+    }
+    case 'charge': {
+      if (args.length < 2) {
+        output.error('Usage: charge <connectorId> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh]')
+        return
+      }
+      const connectorId = parseInt(args[0], 10)
+      const idTag = args[1]
+      const duration = args[2] ? parseInt(args[2], 10) : 60
+      const powerW = args[3] ? parseInt(args[3], 10) : (charger.config.capabilities?.maxPower ?? 7000)
+      const meterInterval = args[4] ? parseInt(args[4], 10) : 30
+      const socStart = args[5] ? parseInt(args[5], 10) : undefined
+      const socEnd = args[6] ? parseInt(args[6], 10) : undefined
+      const batteryCapacityWh = args[7] ? parseInt(args[7], 10) : undefined
+
+      if (isNaN(connectorId) || isNaN(duration) || isNaN(powerW) || isNaN(meterInterval)) {
+        output.error('Numeric arguments must be valid numbers')
+        return
+      }
+
+      const sendAndWait = createReplSendAndWait(connection, pendingMessages, charger)
+      const log = (msg: string): void => { output.info(`[charge] ${msg}`) }
+
+      try {
+        const session = startChargeSession(connection, charger, sendAndWait, log, {
+          connectorId,
+          idTag,
+          duration,
+          powerW,
+          meterInterval,
+          meterStart: 0,
+          socStart,
+          socEnd,
+          batteryCapacityWh
+        })
+        output.status(`Charge session started on connector ${connectorId} (${duration}s, ${powerW}W)`)
+        // Don't await completion — let it run in the background
+        session.completion.catch((err) => {
+          output.error(`Charge session error: ${err}`)
+        })
+      } catch (err) {
+        output.error(`${err instanceof Error ? err.message : err}`)
+      }
+      return
+    }
+    case 'stop-charge': {
+      if (args.length < 1) {
+        output.error('Usage: stop-charge <connectorId>')
+        return
+      }
+      const connectorId = parseInt(args[0], 10)
+      if (isNaN(connectorId)) {
+        output.error('connectorId must be a number')
+        return
+      }
+      const session = getActiveSession(charger.chargerId, connectorId)
+      if (!session) {
+        output.error(`No active charge session on connector ${connectorId}`)
+        return
+      }
+      const sendAndWait = createReplSendAndWait(connection, pendingMessages, charger)
+      const log = (msg: string): void => { output.info(`[charge] ${msg}`) }
+      await stopChargeSession(charger.chargerId, connectorId, connection, charger, sendAndWait, log)
+      output.status(`Charge session on connector ${connectorId} stopped`)
       return
     }
   }

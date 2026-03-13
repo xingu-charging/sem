@@ -1,0 +1,53 @@
+# Happy path RFID charging session
+# Simulates a full charge cycle: RFID tap → authorize → charge → stop
+# Usage: sem script templates/scripts/happy-rfid.sem --charger templates/chargers/ac-7kw.json
+
+# Boot the charger
+send boot
+wait 1
+
+# Set connector to available
+send status 1 Available
+
+# Wait for things to settle
+wait 2
+
+# Authorize the RFID tag
+send authorize TOKEN001
+wait 1
+
+# Preparing state
+send status 1 Preparing
+wait 1
+
+# Start transaction
+send start 1 TOKEN001 0
+wait 1
+
+# Charging state
+send status 1 Charging
+wait 2
+
+# Send meter values over time
+send meter 1 $txId 500 7000
+wait 10
+
+send meter 1 $txId 1500 7000
+wait 10
+
+send meter 1 $txId 3000 7000
+wait 10
+
+send meter 1 $txId 5000 7000
+wait 10
+
+# Stop transaction
+send stop $txId 5000
+wait 1
+
+# Finishing state
+send status 1 Finishing
+wait 2
+
+# Back to available
+send status 1 Available
