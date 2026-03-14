@@ -436,6 +436,170 @@ sem stop SEM-AC7K-001
 sem stop SEM-DC50K-001
 ```
 
+## Programmatic API
+
+sem exposes a programmatic API for direct integration into Node.js applications, test runners, and CI/CD pipelines — no CLI subprocess spawning needed.
+
+```bash
+pnpm add @xingu-charging/sem
+```
+
+### Exports
+
+```typescript
+import {
+  startDaemon,
+  sendCommand,
+  getStatus,
+  shutdown,
+  cleanStaleSessions,
+  loadChargerTemplate
+} from '@xingu-charging/sem'
+
+import type {
+  StartDaemonOptions,
+  StartDaemonResult,
+  DaemonResponse,
+  SessionMetadata,
+  LoadedCharger
+} from '@xingu-charging/sem'
+```
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `startDaemon(options)` | `Promise<StartDaemonResult>` | Spawn a daemon process from a charger template. Returns `{ sessionId, pid }` |
+| `sendCommand(sessionId, command, args)` | `Promise<DaemonResponse>` | Send an OCPP command to a running daemon |
+| `getStatus(sessionId)` | `Promise<DaemonResponse>` | Get current charger state (connected, transactionId, connectors) |
+| `shutdown(sessionId)` | `Promise<DaemonResponse>` | Gracefully disconnect and stop the daemon |
+| `cleanStaleSessions()` | `void` | Remove session files for dead daemon processes |
+| `loadChargerTemplate(path, env?, url?)` | `LoadedCharger` | Parse a charger JSON template without starting a daemon |
+
+### Using with Cypress E2E Tests
+
+The programmatic API integrates directly into Cypress tasks, enabling real OCPP charging sessions in E2E tests. Here's how to set it up:
+
+**1. Install sem in your test project:**
+
+```bash
+pnpm add -D @xingu-charging/sem
+```
+
+**2. Register Cypress tasks in `cypress.config.ts`:**
+
+```typescript
+import { startDaemon, sendCommand, getStatus, shutdown } from '@xingu-charging/sem'
+import { writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+
+// Inside setupNodeEvents:
+const semTemplateDir = join(tmpdir(), 'sem-templates')
+mkdirSync(semTemplateDir, { recursive: true })
+
+on('task', {
+  async semStart({ chargerId, username, password }) {
+    // Generate a charger template dynamically
+    const template = {
+      name: `E2E ${chargerId}`,
+      identity: { vendor: 'Xingu', model: 'E2E-AC7K', serialNumber: chargerId },
+      connection: { chargerId, protocol: '1.6', username, password },
+      capabilities: { maxPower: 7000, phases: 1, voltage: 230, maxCurrent: 32 },
+      connectors: [{ connectorId: 1, type: 'Type2', format: 'Socket',
+                     powerType: 'AC_1_PHASE', maxPower: 7000, maxVoltage: 230, maxAmperage: 32 }],
+      meterValueConfig: { sampleInterval: 10,
+        measurands: ['Energy.Active.Import.Register', 'Power.Active.Import'] }
+    }
+
+    const chargerPath = join(semTemplateDir, `${chargerId}.json`)
+    writeFileSync(chargerPath, JSON.stringify(template, null, 2))
+
+    const result = await startDaemon({
+      chargerPath,
+      url: 'wss://ocpp-staging.xingu-charging.com',
+      noBoot: false
+    })
+    return { sessionId: result.sessionId }
+  },
+
+  async semCharge({ sessionId, connectorId, idTag, duration, power, interval }) {
+    await sendCommand(sessionId, 'charge', [
+      String(connectorId), idTag, String(duration), String(power), String(interval)
+    ])
+    return null
+  },
+
+  async semStatus({ sessionId }) {
+    return getStatus(sessionId)
+  },
+
+  async semShutdown({ sessionId }) {
+    await shutdown(sessionId)
+    return null
+  }
+})
+```
+
+**3. Use in test specs:**
+
+```typescript
+// Start daemon — connects to OCPP gateway, boots, sets connectors Available
+cy.task('semStart', { chargerId: 'MY-CHARGER-001', username: 'user', password: 'pass' })
+  .then((result) => {
+    cy.task('setState', { key: 'semSessionId', value: result.sessionId })
+  })
+
+// Run a 60-second charge session at 7kW
+cy.task('semCharge', {
+  sessionId: 'MY-CHARGER-001', connectorId: 1, idTag: 'TOKEN001',
+  duration: 60, power: 7000, interval: 10
+})
+
+// Poll until charge completes (transactionId becomes null)
+function pollUntilComplete(attempts) {
+  if (attempts <= 0) throw new Error('Charge session did not complete')
+  cy.task('semStatus', { sessionId: 'MY-CHARGER-001' }).then((status) => {
+    if (status.type === 'status' && status.transactionId === null) return
+    cy.wait(5000)
+    pollUntilComplete(attempts - 1)
+  })
+}
+pollUntilComplete(18) // 90 second timeout
+
+// Verify session appears in your UI
+cy.visit('/chargers/MY-CHARGER-001')
+cy.get('.MuiDataGrid-row').should('exist')
+
+// Cleanup
+cy.task('semShutdown', { sessionId: 'MY-CHARGER-001' })
+```
+
+### Using in Node.js Scripts
+
+```typescript
+import { startDaemon, sendCommand, getStatus, shutdown } from '@xingu-charging/sem'
+
+const { sessionId } = await startDaemon({
+  chargerPath: './templates/chargers/ac-7kw.json',
+  url: 'wss://ocpp-staging.xingu-charging.com',
+  noBoot: false
+})
+
+console.log(`Session started: ${sessionId}`)
+
+// Run a charge session
+await sendCommand(sessionId, 'charge', ['1', 'TOKEN001', '60', '7000', '10'])
+
+// Poll for completion
+let status = await getStatus(sessionId)
+while (status.type === 'status' && status.transactionId !== null) {
+  await new Promise(r => setTimeout(r, 5000))
+  status = await getStatus(sessionId)
+}
+
+console.log('Charge complete')
+await shutdown(sessionId)
+```
+
 ## Charger Template Format
 
 Templates are JSON files defining charger identity, connection settings, and capabilities:

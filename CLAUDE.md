@@ -18,10 +18,47 @@ This file provides guidance to Claude Code when working with the sem repository.
 - **WebSocket**: ws library for OCPP connections
 - **Output**: chalk for color-coded terminal output
 
+## Programmatic API (`src/index.ts`)
+
+sem exposes a programmatic API via `exports` in package.json for direct use by consuming packages (e.g. Cypress E2E tasks). No CLI subprocess spawning needed.
+
+### Exported Functions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `startDaemon` | `(options: StartDaemonOptions) => Promise<StartDaemonResult>` | Spawn daemon from template. Returns `{ sessionId, pid }` |
+| `sendCommand` | `(sessionId, command, args) => Promise<DaemonResponse>` | Send OCPP command to running daemon |
+| `getStatus` | `(sessionId) => Promise<DaemonResponse>` | Get charger state (connected, transactionId, connectors) |
+| `shutdown` | `(sessionId) => Promise<DaemonResponse>` | Graceful disconnect and stop |
+| `cleanStaleSessions` | `() => void` | Remove files for dead daemon processes |
+| `loadChargerTemplate` | `(path, env?, url?) => LoadedCharger` | Parse charger JSON without starting daemon |
+
+### Exported Types
+
+| Type | Source | Description |
+|------|--------|-------------|
+| `StartDaemonOptions` | `daemon/manager.ts` | `{ chargerPath, env?, url?, noBoot }` |
+| `StartDaemonResult` | `daemon/manager.ts` | `{ sessionId, pid }` |
+| `DaemonResponse` | `daemon/types.ts` | Union: `result \| error \| status` |
+| `SessionMetadata` | `daemon/types.ts` | Persisted session info (chargerId, url, pid, etc.) |
+| `LoadedCharger` | `lib/charger.ts` | Resolved charger template with runtime state |
+
+### Integration with E2E Tests
+
+The programmatic API is used by `@xingu-charging/test` via Cypress tasks:
+
+1. **`semStart`** — generates a charger template JSON dynamically, calls `startDaemon()` with OCPP staging URL
+2. **`semCharge`** — calls `sendCommand(sessionId, 'charge', args)` to run an automated charge session
+3. **`semStatus`** — calls `getStatus(sessionId)` to poll for charge completion (`transactionId === null`)
+4. **`semShutdown`** — calls `shutdown(sessionId)` to gracefully stop the daemon
+
+When modifying the programmatic API, always ensure backward compatibility with these Cypress tasks.
+
 ## Project Structure
 
 ```Text
 src/
+  index.ts              # Programmatic API entry point (re-exports for consuming packages)
   cli.ts                # Entry point — Commander.js command definitions
   repl.ts               # Interactive REPL with command dispatch
   commands.ts           # Shared OCPP command builder (used by REPL, daemon, scripts)
@@ -114,3 +151,12 @@ When `autoCharge` is enabled (default in both REPL and daemon):
 ### Daemon IPC
 
 The daemon communicates via Unix socket at `/tmp/sem/<id>.sock` using newline-delimited JSON. Request types: `command` (OCPP command), `status` (charger state), `shutdown` (graceful stop). The parent process waits for "READY" on stdout before confirming the session started.
+
+### Dual Entry Points
+
+The package has two entry points:
+
+- **CLI** (`bin.sem` → `dist/cli.js`) — Commander.js CLI for interactive use (`sem start`, `sem send`, etc.)
+- **Programmatic API** (`exports["."]` → `dist/index.js`) — Direct function imports for consuming packages
+
+Both use the same underlying daemon infrastructure. The programmatic API simply calls the same `startDaemon()`, `sendCommand()`, etc. functions that the CLI commands use internally. The daemon process itself is always spawned via `sem _daemon` (hidden CLI command), even when started programmatically.

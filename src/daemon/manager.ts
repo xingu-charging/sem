@@ -14,7 +14,7 @@ import path from 'node:path'
 import { sessionExists, cleanStaleSessions } from './client.js'
 
 /** Options for starting a new daemon session. */
-interface StartDaemonOptions {
+export interface StartDaemonOptions {
   /** Path to the charger JSON template file */
   chargerPath: string
   /** Environment override (staging, production, local) */
@@ -26,7 +26,7 @@ interface StartDaemonOptions {
 }
 
 /** Result returned after a daemon has been successfully spawned and is ready. */
-interface StartDaemonResult {
+export interface StartDaemonResult {
   /** The session ID (chargerId from the template) */
   sessionId: string
   /** PID of the spawned daemon process */
