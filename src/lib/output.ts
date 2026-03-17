@@ -20,13 +20,22 @@ let config: OutputConfig = {
   verbosity: 'normal'
 }
 
+/** When true, all output is suppressed (used in daemon mode to prevent EPIPE crashes). */
+let muted = false
+
 /** Update output configuration (verbosity level). */
 export function setOutputConfig(newConfig: Partial<OutputConfig>): void {
   config = { ...config, ...newConfig }
 }
 
+/** Suppress all console output. Used in daemon mode after READY to prevent EPIPE on broken stdout pipe. */
+export function mute(): void {
+  muted = true
+}
+
 /** Print an outgoing OCPP message (charger -> server). Blue [->] prefix. */
 export function outgoing(action: string, detail?: string): void {
+  if (muted) return
   const prefix = chalk.blue('[->]')
   const msg = detail ? `${prefix} ${action}: ${detail}` : `${prefix} ${action}`
   console.log(msg)
@@ -34,6 +43,7 @@ export function outgoing(action: string, detail?: string): void {
 
 /** Print an incoming OCPP response (server -> charger). Green [<-] prefix. */
 export function incoming(action: string, detail?: string): void {
+  if (muted) return
   const prefix = chalk.green('[<-]')
   const msg = detail ? `${prefix} ${action}: ${detail}` : `${prefix} ${action}`
   console.log(msg)
@@ -41,6 +51,7 @@ export function incoming(action: string, detail?: string): void {
 
 /** Print a server-initiated message (e.g., RemoteStartTransaction). Yellow prefix. */
 export function serverInitiated(action: string, detail?: string): void {
+  if (muted) return
   const prefix = chalk.yellow('[<-] Server:')
   const msg = detail ? `${prefix} ${action}: ${detail}` : `${prefix} ${action}`
   console.log(msg)
@@ -48,16 +59,19 @@ export function serverInitiated(action: string, detail?: string): void {
 
 /** Print an error message. Red [!] prefix. Always shown regardless of verbosity. */
 export function error(message: string): void {
+  if (muted) return
   console.log(chalk.red(`[!] ${message}`))
 }
 
 /** Print a status/lifecycle message (connecting, disconnecting, etc.). Cyan. */
 export function status(message: string): void {
+  if (muted) return
   console.log(chalk.cyan(message))
 }
 
 /** Print raw OCPP JSON. Only shown in verbose mode. */
 export function verbose(message: string): void {
+  if (muted) return
   if (config.verbosity === 'verbose') {
     console.log(chalk.gray(message))
   }
@@ -65,6 +79,7 @@ export function verbose(message: string): void {
 
 /** Print informational text. Suppressed in quiet mode. */
 export function info(message: string): void {
+  if (muted) return
   if (config.verbosity !== 'quiet') {
     console.log(message)
   }

@@ -15,6 +15,7 @@ import { OcppConnection } from '../ocpp/connection.js'
 import { ConnectionState, MessageType, type OcppMessage } from '../ocpp/types.js'
 import { loadChargerTemplate, setTransactionId, setConnectorStatus, type LoadedCharger } from '../lib/charger.js'
 import { handleServerMessage, setServerHandlerConfig } from '../lib/serverHandler.js'
+import { mute as muteOutput } from '../lib/output.js'
 import { buildCommand, formatCallResult, isCommandError } from '../commands.js'
 import { createStatusNotification } from '../ocpp/messages.js'
 import { startChargeSession, stopChargeSession, getActiveSession, gracefulShutdown, type SendAndWaitFn } from '../lib/chargeSession.js'
@@ -231,6 +232,10 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     log(`Socket server listening at ${socketPath}`)
     // Signal parent that we're ready by writing to stdout
     process.stdout.write('READY\n')
+    // Mute console output — parent unrefs the child after READY, which can
+    // break the stdout pipe. Any console.log() after this point would throw
+    // EPIPE and crash the daemon process.
+    muteOutput()
   })
 
   // Graceful shutdown
