@@ -350,7 +350,7 @@ async function handleCommandRequest(
     // Handle charge session commands
     if (command === 'charge') {
       if (args.length < 2) {
-        sendResponse(socket, { type: 'error', message: 'Usage: charge <connectorId> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh]' })
+        sendResponse(socket, { type: 'error', message: 'Usage: charge <connectorId> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh] [parkingDuration] [preChargeDelay]' })
         return
       }
       const connectorId = parseInt(args[0], 10)
@@ -361,6 +361,8 @@ async function handleCommandRequest(
       const socStart = args[5] ? parseInt(args[5], 10) : undefined
       const socEnd = args[6] ? parseInt(args[6], 10) : undefined
       const batteryCapacityWh = args[7] ? parseInt(args[7], 10) : undefined
+      const parkingDurationS = args[8] ? parseInt(args[8], 10) : undefined
+      const preChargeDelayS = args[9] ? parseInt(args[9], 10) : undefined
 
       if (isNaN(connectorId) || isNaN(duration) || isNaN(powerW) || isNaN(meterInterval)) {
         sendResponse(socket, { type: 'error', message: 'Numeric arguments must be valid numbers' })
@@ -377,7 +379,9 @@ async function handleCommandRequest(
         meterStart: 0,
         socStart,
         socEnd,
-        batteryCapacityWh
+        batteryCapacityWh,
+        parkingDurationS,
+        preChargeDelayS
       })
       sendResponse(socket, {
         type: 'result',

@@ -42,6 +42,10 @@ export interface ChargeSessionOptions {
   socEnd?: number
   /** Battery capacity in Wh (DC only, default: 60000) */
   batteryCapacityWh?: number
+  /** Seconds to simulate post-charge parking before StopTransaction (default: 0) */
+  parkingDurationS?: number
+  /** Seconds to wait in Preparing before starting charge (default: 0) */
+  preChargeDelayS?: number
 }
 
 /** Callback to send a message and wait for the correlated CALLRESULT. */
@@ -282,6 +286,13 @@ async function runSession(
 
     if (session.cancelled) return
 
+    // 2b. Pre-charge delay (simulate EV plugged in but not yet charging)
+    if (options.preChargeDelayS && options.preChargeDelayS > 0) {
+      log(`Pre-charge delay: ${options.preChargeDelayS}s (connector occupied, not charging)`)
+      await waitOrCancel(session, options.preChargeDelayS * 1000)
+      if (session.cancelled) return
+    }
+
     // 3. StartTransaction
     const startMsg = createStartTransaction(options.connectorId, options.idTag, options.meterStart)
     const startResponse = await sendAndWait('StartTransaction', startMsg)
@@ -332,7 +343,7 @@ async function runSession(
             session.endTimer = null
           }
           // Trigger session end
-          void endSession(session, charger, sendAndWait, log, options.connectorId, key)
+          void endSession(session, charger, sendAndWait, log, options.connectorId, key, options)
           return
         }
       } else {
@@ -378,7 +389,7 @@ async function runSession(
 
       if (session.cancelled) return
 
-      await endSession(session, charger, sendAndWait, log, options.connectorId, key)
+      await endSession(session, charger, sendAndWait, log, options.connectorId, key, options)
     } else {
       // duration=0: run until stopped externally (RemoteStop, stop-charge, shutdown)
       // Keep the function alive so the session stays registered in activeSessions
@@ -398,14 +409,15 @@ async function runSession(
   }
 }
 
-/** End a charge session: stop meter loop, send StopTransaction, transition to Available. */
+/** End a charge session: stop meter loop, optionally park, send StopTransaction, transition to Available. */
 async function endSession(
   session: ActiveChargeSession,
   charger: LoadedCharger,
   sendAndWait: SendAndWaitFn,
   log: ChargeLogFn,
   connectorId: number,
-  key: string
+  key: string,
+  options?: ChargeSessionOptions
 ): Promise<void> {
   // Stop the meter loop
   if (session.meterTimer) {
@@ -417,6 +429,48 @@ async function endSession(
   if (txId === null) return
 
   const finalEnergy = Math.round(session.currentEnergyWh)
+
+  // Post-charge parking phase (EV stays plugged in after charging completes)
+  const parkingDuration = options?.parkingDurationS ?? 0
+  if (parkingDuration > 0 && !session.cancelled) {
+    // Transition to SuspendedEV — server will call session.startParking()
+    const suspendMsg = createStatusNotification(connectorId, 'SuspendedEV')
+    await sendAndWait('StatusNotification', suspendMsg)
+    setConnectorStatus(charger, connectorId, 'SuspendedEV')
+    log(`Parking started: ${parkingDuration}s (connector occupied, 0W)`)
+
+    // Send meter values during parking (0W, same energy)
+    const meterInterval = options?.meterInterval ?? 30
+    const isDc = isDcCharger(charger, connectorId)
+    const finalSoc = isDc
+      ? Math.round(calculateSoc(
+          options?.socStart ?? 20,
+          session.currentEnergyWh - (options?.meterStart ?? 0),
+          options?.batteryCapacityWh ?? 60000
+        ))
+      : undefined
+
+    const parkingMeterLoop = setInterval(async () => {
+      if (session.cancelled) return
+      try {
+        const meterOpts: Parameters<typeof createMeterValues>[2] = {
+          energyWh: finalEnergy,
+          powerW: 0
+        }
+        if (finalSoc !== undefined) meterOpts.socPercent = finalSoc
+        const meterMsg = createMeterValues(connectorId, txId, meterOpts)
+        await sendAndWait('MeterValues', meterMsg)
+        log(`MeterValues (parking): energy=${finalEnergy}Wh power=0W`)
+      } catch {
+        log('Failed to send parking meter values')
+      }
+    }, meterInterval * 1000)
+
+    await waitOrCancel(session, parkingDuration * 1000)
+
+    clearInterval(parkingMeterLoop)
+    log('Parking ended')
+  }
 
   // StopTransaction
   const stopMsg = createStopTransaction(txId, finalEnergy, 'Local')
@@ -484,6 +538,22 @@ export async function gracefulShutdown(
   } else {
     log(`Already disconnected`)
   }
+}
+
+/** Wait for a duration or until the session is cancelled, whichever comes first. */
+function waitOrCancel(session: ActiveChargeSession, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    const check = setInterval(() => {
+      if (session.cancelled) {
+        clearTimeout(timer)
+        clearInterval(check)
+        resolve()
+      }
+    }, 500)
+    // Also clear poll when timer fires naturally
+    setTimeout(() => clearInterval(check), ms + 100)
+  })
 }
 
 /** Simple delay helper. */
