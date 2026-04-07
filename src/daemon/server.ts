@@ -15,6 +15,7 @@ import { OcppConnection } from '../ocpp/connection.js'
 import { ConnectionState, MessageType, type OcppMessage } from '../ocpp/types.js'
 import { loadChargerTemplate, setTransactionId, setConnectorStatus, type LoadedCharger } from '../lib/charger.js'
 import { handleServerMessage, setServerHandlerConfig } from '../lib/serverHandler.js'
+import { mute as muteOutput } from '../lib/output.js'
 import { buildCommand, formatCallResult, isCommandError } from '../commands.js'
 import { createStatusNotification } from '../ocpp/messages.js'
 import { startChargeSession, stopChargeSession, getActiveSession, gracefulShutdown, type SendAndWaitFn } from '../lib/chargeSession.js'
@@ -231,6 +232,10 @@ export async function runDaemon(options: DaemonOptions): Promise<void> {
     log(`Socket server listening at ${socketPath}`)
     // Signal parent that we're ready by writing to stdout
     process.stdout.write('READY\n')
+    // Mute console output — parent unrefs the child after READY, which can
+    // break the stdout pipe. Any console.log() after this point would throw
+    // EPIPE and crash the daemon process.
+    muteOutput()
   })
 
   // Graceful shutdown
@@ -345,7 +350,7 @@ async function handleCommandRequest(
     // Handle charge session commands
     if (command === 'charge') {
       if (args.length < 2) {
-        sendResponse(socket, { type: 'error', message: 'Usage: charge <connectorId> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh]' })
+        sendResponse(socket, { type: 'error', message: 'Usage: charge <connectorId> <idTag> [duration] [power] [interval] [socStart] [socEnd] [batteryWh] [parkingDuration] [preChargeDelay]' })
         return
       }
       const connectorId = parseInt(args[0], 10)
@@ -356,6 +361,8 @@ async function handleCommandRequest(
       const socStart = args[5] ? parseInt(args[5], 10) : undefined
       const socEnd = args[6] ? parseInt(args[6], 10) : undefined
       const batteryCapacityWh = args[7] ? parseInt(args[7], 10) : undefined
+      const parkingDurationS = args[8] ? parseInt(args[8], 10) : undefined
+      const preChargeDelayS = args[9] ? parseInt(args[9], 10) : undefined
 
       if (isNaN(connectorId) || isNaN(duration) || isNaN(powerW) || isNaN(meterInterval)) {
         sendResponse(socket, { type: 'error', message: 'Numeric arguments must be valid numbers' })
@@ -372,7 +379,9 @@ async function handleCommandRequest(
         meterStart: 0,
         socStart,
         socEnd,
-        batteryCapacityWh
+        batteryCapacityWh,
+        parkingDurationS,
+        preChargeDelayS
       })
       sendResponse(socket, {
         type: 'result',
